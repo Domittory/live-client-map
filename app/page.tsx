@@ -40,6 +40,9 @@ export default async function Home() {
         <Link href="/methods">Библиотека методов коррекции</Link>
       </p>
       <p>
+        <Link href="/corrections">Corrections</Link>
+      </p>
+      <p>
         <Link href="/audit">Audit log</Link>
       </p>
       <p>

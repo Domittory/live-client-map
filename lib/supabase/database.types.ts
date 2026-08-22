@@ -730,6 +730,186 @@ export type Database = {
           },
         ]
       }
+      correction_expected_markers: {
+        Row: {
+          baseline_value: string | null
+          correction_id: string
+          created_at: string
+          expected_direction: string
+          id: string
+          life_area: string | null
+          marker: string
+          measurement_type: string
+          target_value: string | null
+          updated_at: string
+        }
+        Insert: {
+          baseline_value?: string | null
+          correction_id: string
+          created_at?: string
+          expected_direction: string
+          id?: string
+          life_area?: string | null
+          marker: string
+          measurement_type: string
+          target_value?: string | null
+          updated_at?: string
+        }
+        Update: {
+          baseline_value?: string | null
+          correction_id?: string
+          created_at?: string
+          expected_direction?: string
+          id?: string
+          life_area?: string | null
+          marker?: string
+          measurement_type?: string
+          target_value?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_expected_markers_correction_id_fkey"
+            columns: ["correction_id"]
+            isOneToOne: false
+            referencedRelation: "corrections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      correction_targets: {
+        Row: {
+          correction_id: string
+          created_at: string
+          expected_effect: string | null
+          id: string
+          role: string
+          target_id: string
+          target_type: string
+        }
+        Insert: {
+          correction_id: string
+          created_at?: string
+          expected_effect?: string | null
+          id?: string
+          role: string
+          target_id: string
+          target_type: string
+        }
+        Update: {
+          correction_id?: string
+          created_at?: string
+          expected_effect?: string | null
+          id?: string
+          role?: string
+          target_id?: string
+          target_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_targets_correction_id_fkey"
+            columns: ["correction_id"]
+            isOneToOne: false
+            referencedRelation: "corrections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      corrections: {
+        Row: {
+          archived_at: string | null
+          client_id: string
+          client_visible_summary: string | null
+          contraindications_acknowledged: boolean
+          created_at: string
+          created_by: string | null
+          date: string
+          expected_effect: string | null
+          id: string
+          intervention_method_id: string | null
+          method_notes: string | null
+          organization_id: string
+          priority_score_before: number | null
+          rationale: string | null
+          recommendation_id: string | null
+          specialist_notes: string | null
+          status: string
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          archived_at?: string | null
+          client_id: string
+          client_visible_summary?: string | null
+          contraindications_acknowledged?: boolean
+          created_at?: string
+          created_by?: string | null
+          date?: string
+          expected_effect?: string | null
+          id?: string
+          intervention_method_id?: string | null
+          method_notes?: string | null
+          organization_id: string
+          priority_score_before?: number | null
+          rationale?: string | null
+          recommendation_id?: string | null
+          specialist_notes?: string | null
+          status?: string
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          archived_at?: string | null
+          client_id?: string
+          client_visible_summary?: string | null
+          contraindications_acknowledged?: boolean
+          created_at?: string
+          created_by?: string | null
+          date?: string
+          expected_effect?: string | null
+          id?: string
+          intervention_method_id?: string | null
+          method_notes?: string | null
+          organization_id?: string
+          priority_score_before?: number | null
+          rationale?: string | null
+          recommendation_id?: string | null
+          specialist_notes?: string | null
+          status?: string
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "corrections_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "corrections_intervention_method_id_fkey"
+            columns: ["intervention_method_id"]
+            isOneToOne: false
+            referencedRelation: "intervention_methods"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "corrections_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "corrections_recommendation_id_fkey"
+            columns: ["recommendation_id"]
+            isOneToOne: false
+            referencedRelation: "recommendations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       development_targets: {
         Row: {
           client_id: string
@@ -2437,6 +2617,15 @@ export type Database = {
       update_member_role: {
         Args: { p_org_id: string; p_role: string; p_user_id: string }
         Returns: undefined
+      }
+      validate_correction_target: {
+        Args: {
+          p_client_id: string
+          p_organization_id: string
+          p_target_id: string
+          p_target_type: string
+        }
+        Returns: boolean
       }
     }
     Enums: {
