@@ -1,12 +1,25 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import type { Tables } from "@/lib/supabase/database.types";
 import { recordAudit, withAudit } from "./audit";
 import { ServiceError } from "./errors";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
 import { uuid, validate } from "./validation";
 
-export type InterventionMethod = Tables<"intervention_methods">;
+/** intervention_methods (migration 0014); system rows have organization_id = null. */
+export interface InterventionMethod {
+  id: string;
+  organization_id: string | null;
+  name: string;
+  description: string | null;
+  category: string | null;
+  contraindications: string[];
+  default_follow_up_days: number | null;
+  is_system: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
 
 const followUpDays = z.number().int().min(1).max(365);
 
@@ -49,7 +62,10 @@ async function requireUserId(client: SupabaseClient): Promise<string> {
 
 function mapWriteError(error: { code?: string }, fallback: string): ServiceError {
   if (error.code === "42501") {
-    return new ServiceError("FORBIDDEN", "Only active owners/specialists of the organization can modify methods");
+    return new ServiceError(
+      "FORBIDDEN",
+      "Only active owners/specialists of the organization can modify methods"
+    );
   }
   if (error.code === "23505") {
     return new ServiceError("CONFLICT", "Method name already exists in this scope");
@@ -83,9 +99,7 @@ export async function listMethods(
   const { data, error } = await request;
   if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to list intervention methods");
 
-  return toPage((data ?? []) as InterventionMethod[], query.limit, (last) =>
-    encodeCursor(last.id)
-  );
+  return toPage((data ?? []) as InterventionMethod[], query.limit, (last) => encodeCursor(last.id));
 }
 
 /** Read one method by id — archived included (old Corrections keep references). */
@@ -183,7 +197,8 @@ export async function updateOrgMethod(
         .select()
         .single();
       if (error) throw mapWriteError(error, "Failed to update intervention method");
-      if (!data) throw new ServiceError("NOT_FOUND", "Intervention method not found or not editable");
+      if (!data)
+        throw new ServiceError("NOT_FOUND", "Intervention method not found or not editable");
       return data as InterventionMethod;
     }
   );
@@ -191,10 +206,7 @@ export async function updateOrgMethod(
 }
 
 /** Soft delete (ticket 03): archived methods stay readable for old Corrections. */
-export async function archiveOrgMethod(
-  client: SupabaseClient,
-  methodId: string
-): Promise<void> {
+export async function archiveOrgMethod(client: SupabaseClient, methodId: string): Promise<void> {
   const before = await getMethod(client, methodId);
   if (before.is_system || before.organization_id === null) {
     throw new ServiceError("FORBIDDEN", "System methods cannot be archived");
