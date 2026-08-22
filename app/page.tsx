@@ -37,6 +37,9 @@ export default async function Home() {
         <Link href="/library">Диагностическая библиотека</Link>
       </p>
       <p>
+        <Link href="/methods">Библиотека методов коррекции</Link>
+      </p>
+      <p>
         <Link href="/audit">Audit log</Link>
       </p>
       <p>

@@ -50,7 +50,9 @@ describe.skipIf(!available)("InterventionMethod library (ticket 38)", () => {
 
   beforeAll(async () => {
     const owner = await createUser(`owner-${crypto.randomUUID()}@example.com`);
-    const { data } = await owner.client.rpc("create_organization", { org_name: "Methods Org" });
+    const { data } = await owner.client.rpc("create_organization", {
+      org_name: `Methods Org ${crypto.randomUUID()}`,
+    });
     orgId = data;
 
     specialist = await createUser(`spec-${crypto.randomUUID()}@example.com`);
@@ -154,5 +156,46 @@ describe.skipIf(!available)("InterventionMethod library (ticket 38)", () => {
         contraindications: [],
       })
     ).rejects.toThrow();
+  });
+
+  it("isolates org methods across tenants", async () => {
+    const outsider = await createUser(`outsider-${crypto.randomUUID()}@example.com`);
+    const { data: otherOrgId } = await outsider.client.rpc("create_organization", {
+      org_name: `Other Org ${crypto.randomUUID()}`,
+    });
+    expect(otherOrgId).toBeTruthy();
+
+    const orgPage = await listMethods(outsider.client, {
+      scope: "organization",
+      includeArchived: true,
+    });
+    expect(orgPage.items.some((m) => m.organization_id === orgId)).toBe(false);
+
+    // System methods stay visible to other tenants.
+    const allPage = await listMethods(outsider.client, { scope: "all", includeArchived: true });
+    expect(allPage.items.some((m) => m.id === systemMethodId)).toBe(true);
+  });
+
+  it("records audit entries for create/update/archive", async () => {
+    const created = await createOrgMethod(specialist.client, {
+      organizationId: orgId,
+      name: `Аудируемый метод ${crypto.randomUUID()}`,
+      contraindications: [],
+    });
+    await updateOrgMethod(specialist.client, {
+      methodId: created.id,
+      name: `${created.name} v2`,
+    });
+    await archiveOrgMethod(specialist.client, created.id);
+
+    const { data: entries } = await admin
+      .from("audit_log")
+      .select("action")
+      .eq("entity_type", "intervention_method")
+      .eq("entity_id", created.id);
+    const actions = (entries ?? []).map((entry) => entry.action);
+    expect(actions).toContain("intervention_method.create");
+    expect(actions).toContain("intervention_method.update");
+    expect(actions).toContain("intervention_method.archive");
   });
 });

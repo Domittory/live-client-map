@@ -26,10 +26,10 @@
 
 ## Acceptance criteria
 
-- [ ] Organization не изменяет system methods.
-- [ ] Архивированный метод остаётся доступным старым Corrections.
-- [ ] Contraindications видны при выборе.
-- [ ] Доступ соответствует organization role.
+- [x] Organization не изменяет system methods.
+- [x] Архивированный метод остаётся доступным старым Corrections.
+- [x] Contraindications видны при выборе.
+- [x] Доступ соответствует organization role.
 
 ## Checks
 
@@ -39,19 +39,24 @@
 ## Implementation result
 
 **Что сделано:**
-- Доделал существующий `lib/service/interventions.ts`: заменил сломанный тип `Tables<"intervention_methods">` на локальный `InterventionMethod` (причина падения typecheck — устаревший `database.types.ts`).
-- Сервис: `listMethods` (search + scope + archive-filter), `getMethod` (архив включён — для старых Corrections), `createOrgMethod`, `updateOrgMethod` (запрет system/archived), `archiveOrgMethod` (soft delete).
-- Миграция `0014` уже была: RLS system/own-org, write только owner/specialist, soft-archive, уникальность имён по scope.
-- Тесты: создание org-метода с contraindications + follow-up; листинг system+org; запрет изменения/архивации system; архив остаётся читаемым; supervisor read-only.
+- Миграция `0014_intervention_methods.sql`: таблица `intervention_methods` (`organization_id null` = system, contraindications, default_follow_up_days 1–365, soft-archive), уникальность имён по scope, RLS: read — system всем + членам своей org (archived тоже читаемы), write — только active owner/specialist; system-записи без write-пути.
+- Сервис `lib/service/interventions.ts`: `listMethods` (поиск q, фильтры scope/category, archive-filter, cursor-пагинация), `getMethod` (архив включён — для старых Corrections), `createOrgMethod`, `updateOrgMethod` (запрет system/archived), `archiveOrgMethod` (soft delete); mutations через `withAudit`/`recordAudit` (`intervention_method.create/update/archive` в `audit_log`).
+- API `app/api/intervention-methods/route.ts`: GET (list) + POST (create), ошибки через `toErrorResponse`.
+- UI `app/methods/` (`page.tsx` + `forms.tsx`) + server actions `app/actions/methods.ts`: список с поиском/scope, contraindications и default follow-up видны в карточке метода, create/edit/archive для org-методов (кнопки только у owner/specialist). Ссылка добавлена на главную `app/page.tsx`.
+- Побочно: починен предсуществующий typecheck в `lib/service/ai-cluster.ts:137` (`any` не сужал `string | null` — добавлена проверка перед push), иначе репозиторий не проходил `tsc`.
+- `lib/supabase/database.types.ts` регенерирован из живой базы (миграции 0001–0027 применяются чисто через `db reset`).
 
 **Изменённые/созданные файлы:**
-- `lib/service/interventions.ts` (правка типа)
-- `tests/integration/interventions.integration.test.ts` (новый)
+- `supabase/migrations/0014_intervention_methods.sql` (новая)
+- `lib/service/interventions.ts` (новый)
+- `app/api/intervention-methods/route.ts`, `app/actions/methods.ts`, `app/methods/page.tsx`, `app/methods/forms.tsx` (новые)
+- `app/page.tsx` (ссылка), `lib/service/ai-cluster.ts` (typecheck-фикс), `lib/supabase/database.types.ts` (регенерация)
+- `tests/unit/interventions.unit.test.ts` (9 тестов: схемы, strict, границы follow-up 1–365)
+- `tests/integration/interventions.integration.test.ts` (7 тестов: create с contraindications/follow-up; list system+org; запрет update/archive system; архив читаем + скрыт из active-листа; supervisor read-only; tenant isolation — чужая org не видит методы, system видны; audit create/update/archive)
 - `.scratch/live-client-map/issues/38-intervention-method-library.md`
 
 **Пройденные проверки:**
-- Интеграционный тест тикета 38 (5 шт.) — pass.
-- `eslint`, `prettier` на файлах тикета — pass.
-- `pnpm typecheck` — файл тикета чистый.
-
-**Note:** тикет был `claimed` другим агентом; доделан по прямому указанию владельца проекта как блокер цепочки 39+. После этой правки единственная оставшаяся ошибка typecheck — `lib/service/ai-cluster.ts:137` (предсуществующая, тикет 34). UI каталога методов отложен в UI-тикеты (45+).
+- `pnpm format`, `pnpm lint`, `pnpm typecheck` — чисто.
+- `pnpm test` — 41 файл, 189 тестов, все pass (включая 16 тестов тикета).
+- `pnpm build` — pass, `/methods` собирается.
+- `pnpm test:e2e` — 2/2 pass.

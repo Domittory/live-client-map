@@ -134,7 +134,7 @@ export async function classifyThemes(
         .single();
       if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to create theme proposal");
       themeId = data.id;
-      themeIds.push(themeId);
+      if (themeId) themeIds.push(themeId);
     }
 
     if (!themeId) continue;

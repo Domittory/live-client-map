@@ -551,6 +551,254 @@ export type Database = {
           },
         ]
       }
+      core_node_relations: {
+        Row: {
+          client_id: string
+          confidence: number | null
+          created_at: string
+          created_by: string | null
+          evidence_summary: string | null
+          from_core_node_id: string
+          id: string
+          organization_id: string
+          relation_type: string
+          strength: number | null
+          to_core_node_id: string
+          updated_at: string
+        }
+        Insert: {
+          client_id: string
+          confidence?: number | null
+          created_at?: string
+          created_by?: string | null
+          evidence_summary?: string | null
+          from_core_node_id: string
+          id?: string
+          organization_id: string
+          relation_type: string
+          strength?: number | null
+          to_core_node_id: string
+          updated_at?: string
+        }
+        Update: {
+          client_id?: string
+          confidence?: number | null
+          created_at?: string
+          created_by?: string | null
+          evidence_summary?: string | null
+          from_core_node_id?: string
+          id?: string
+          organization_id?: string
+          relation_type?: string
+          strength?: number | null
+          to_core_node_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "core_node_relations_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "core_node_relations_from_core_node_id_fkey"
+            columns: ["from_core_node_id"]
+            isOneToOne: false
+            referencedRelation: "core_nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "core_node_relations_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "core_node_relations_to_core_node_id_fkey"
+            columns: ["to_core_node_id"]
+            isOneToOne: false
+            referencedRelation: "core_nodes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      core_nodes: {
+        Row: {
+          activation_score: number | null
+          archived_at: string | null
+          client_id: string
+          client_relevance_score: number | null
+          confidence_score: number | null
+          contexts_count: number
+          created_at: string
+          created_by: string | null
+          evidence_count: number
+          hypothesis: string | null
+          id: string
+          impact_score: number | null
+          independent_evidence_count: number
+          last_confirmed_at: string | null
+          last_confirmed_by: string | null
+          organization_id: string
+          readiness_score: number | null
+          risk_score: number | null
+          root_domain: string | null
+          rootness_score: number | null
+          status: string
+          strength_score: number | null
+          title: string
+          trend: string | null
+          unlock_score: number | null
+          updated_at: string
+          visibility: string
+        }
+        Insert: {
+          activation_score?: number | null
+          archived_at?: string | null
+          client_id: string
+          client_relevance_score?: number | null
+          confidence_score?: number | null
+          contexts_count?: number
+          created_at?: string
+          created_by?: string | null
+          evidence_count?: number
+          hypothesis?: string | null
+          id?: string
+          impact_score?: number | null
+          independent_evidence_count?: number
+          last_confirmed_at?: string | null
+          last_confirmed_by?: string | null
+          organization_id: string
+          readiness_score?: number | null
+          risk_score?: number | null
+          root_domain?: string | null
+          rootness_score?: number | null
+          status?: string
+          strength_score?: number | null
+          title: string
+          trend?: string | null
+          unlock_score?: number | null
+          updated_at?: string
+          visibility?: string
+        }
+        Update: {
+          activation_score?: number | null
+          archived_at?: string | null
+          client_id?: string
+          client_relevance_score?: number | null
+          confidence_score?: number | null
+          contexts_count?: number
+          created_at?: string
+          created_by?: string | null
+          evidence_count?: number
+          hypothesis?: string | null
+          id?: string
+          impact_score?: number | null
+          independent_evidence_count?: number
+          last_confirmed_at?: string | null
+          last_confirmed_by?: string | null
+          organization_id?: string
+          readiness_score?: number | null
+          risk_score?: number | null
+          root_domain?: string | null
+          rootness_score?: number | null
+          status?: string
+          strength_score?: number | null
+          title?: string
+          trend?: string | null
+          unlock_score?: number | null
+          updated_at?: string
+          visibility?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "core_nodes_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "core_nodes_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      development_targets: {
+        Row: {
+          client_id: string
+          created_at: string
+          current_level: number | null
+          description: string | null
+          domain: string | null
+          id: string
+          importance: string
+          linked_core_nodes: string[]
+          linked_resources: string[]
+          name: string
+          organization_id: string
+          status: string
+          success_markers: string[]
+          target_level: number | null
+          updated_at: string
+        }
+        Insert: {
+          client_id: string
+          created_at?: string
+          current_level?: number | null
+          description?: string | null
+          domain?: string | null
+          id?: string
+          importance?: string
+          linked_core_nodes?: string[]
+          linked_resources?: string[]
+          name: string
+          organization_id: string
+          status?: string
+          success_markers?: string[]
+          target_level?: number | null
+          updated_at?: string
+        }
+        Update: {
+          client_id?: string
+          created_at?: string
+          current_level?: number | null
+          description?: string | null
+          domain?: string | null
+          id?: string
+          importance?: string
+          linked_core_nodes?: string[]
+          linked_resources?: string[]
+          name?: string
+          organization_id?: string
+          status?: string
+          success_markers?: string[]
+          target_level?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "development_targets_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "development_targets_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       diagnostic_domains: {
         Row: {
           applicable_contexts: string[]
@@ -629,6 +877,70 @@ export type Database = {
           },
         ]
       }
+      diagnostic_session_summaries: {
+        Row: {
+          client_id: string
+          confirmed_hypotheses: string[]
+          contradicted_hypotheses: string[]
+          created_at: string
+          diagnostic_session_id: string
+          id: string
+          new_hypotheses: string[]
+          organization_id: string
+          priority_changes: string[]
+          strongest_findings: string[]
+          summary: string | null
+        }
+        Insert: {
+          client_id: string
+          confirmed_hypotheses?: string[]
+          contradicted_hypotheses?: string[]
+          created_at?: string
+          diagnostic_session_id: string
+          id?: string
+          new_hypotheses?: string[]
+          organization_id: string
+          priority_changes?: string[]
+          strongest_findings?: string[]
+          summary?: string | null
+        }
+        Update: {
+          client_id?: string
+          confirmed_hypotheses?: string[]
+          contradicted_hypotheses?: string[]
+          created_at?: string
+          diagnostic_session_id?: string
+          id?: string
+          new_hypotheses?: string[]
+          organization_id?: string
+          priority_changes?: string[]
+          strongest_findings?: string[]
+          summary?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "diagnostic_session_summaries_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "diagnostic_session_summaries_diagnostic_session_id_fkey"
+            columns: ["diagnostic_session_id"]
+            isOneToOne: false
+            referencedRelation: "diagnostic_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "diagnostic_session_summaries_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       diagnostic_sessions: {
         Row: {
           ai_processing_status: string
@@ -691,6 +1003,253 @@ export type Database = {
           },
           {
             foreignKeyName: "diagnostic_sessions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      differential_hypotheses: {
+        Row: {
+          client_id: string
+          confidence_score: number | null
+          created_at: string
+          created_by: string | null
+          description: string | null
+          evidence_against: string[]
+          evidence_for: string[]
+          id: string
+          organization_id: string
+          status: string
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          client_id: string
+          confidence_score?: number | null
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          evidence_against?: string[]
+          evidence_for?: string[]
+          id?: string
+          organization_id: string
+          status?: string
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          client_id?: string
+          confidence_score?: number | null
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          evidence_against?: string[]
+          evidence_for?: string[]
+          id?: string
+          organization_id?: string
+          status?: string
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "differential_hypotheses_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "differential_hypotheses_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      evidence_clusters: {
+        Row: {
+          client_id: string
+          context_key: string
+          created_at: string
+          diagnostic_session_id: string | null
+          id: string
+          independent_weight: number
+          organization_id: string
+          semantic_topic: string
+          signals_count: number
+          updated_at: string
+        }
+        Insert: {
+          client_id: string
+          context_key: string
+          created_at?: string
+          diagnostic_session_id?: string | null
+          id?: string
+          independent_weight?: number
+          organization_id: string
+          semantic_topic: string
+          signals_count?: number
+          updated_at?: string
+        }
+        Update: {
+          client_id?: string
+          context_key?: string
+          created_at?: string
+          diagnostic_session_id?: string | null
+          id?: string
+          independent_weight?: number
+          organization_id?: string
+          semantic_topic?: string
+          signals_count?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "evidence_clusters_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "evidence_clusters_diagnostic_session_id_fkey"
+            columns: ["diagnostic_session_id"]
+            isOneToOne: false
+            referencedRelation: "diagnostic_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "evidence_clusters_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      imports: {
+        Row: {
+          client_id: string
+          content_sha256: string
+          contract_version: string
+          counts: Json
+          created_at: string
+          diagnostic_session_id: string | null
+          fatal_errors: Json
+          id: string
+          idempotency_key: string
+          input_format: string
+          organization_id: string
+          report: Json
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          client_id: string
+          content_sha256: string
+          contract_version: string
+          counts?: Json
+          created_at?: string
+          diagnostic_session_id?: string | null
+          fatal_errors?: Json
+          id?: string
+          idempotency_key: string
+          input_format: string
+          organization_id: string
+          report?: Json
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          client_id?: string
+          content_sha256?: string
+          contract_version?: string
+          counts?: Json
+          created_at?: string
+          diagnostic_session_id?: string | null
+          fatal_errors?: Json
+          id?: string
+          idempotency_key?: string
+          input_format?: string
+          organization_id?: string
+          report?: Json
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "imports_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "imports_diagnostic_session_id_fkey"
+            columns: ["diagnostic_session_id"]
+            isOneToOne: false
+            referencedRelation: "diagnostic_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "imports_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      intervention_methods: {
+        Row: {
+          archived_at: string | null
+          category: string | null
+          contraindications: string[]
+          created_at: string
+          created_by: string | null
+          default_follow_up_days: number | null
+          description: string | null
+          id: string
+          is_system: boolean
+          name: string
+          organization_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          archived_at?: string | null
+          category?: string | null
+          contraindications?: string[]
+          created_at?: string
+          created_by?: string | null
+          default_follow_up_days?: number | null
+          description?: string | null
+          id?: string
+          is_system?: boolean
+          name: string
+          organization_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          archived_at?: string | null
+          category?: string | null
+          contraindications?: string[]
+          created_at?: string
+          created_by?: string | null
+          default_follow_up_days?: number | null
+          description?: string | null
+          id?: string
+          is_system?: boolean
+          name?: string
+          organization_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "intervention_methods_organization_id_fkey"
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
@@ -945,6 +1504,486 @@ export type Database = {
         }
         Relationships: []
       }
+      purpose_profiles: {
+        Row: {
+          client_id: string
+          confidence: number | null
+          created_at: string
+          development_directions: string[]
+          id: string
+          interpretation: string | null
+          organization_id: string
+          potential_roles: string[]
+          raw_data: Json
+          source_system: string
+          strengths: string[]
+          updated_at: string
+          visibility: string
+        }
+        Insert: {
+          client_id: string
+          confidence?: number | null
+          created_at?: string
+          development_directions?: string[]
+          id?: string
+          interpretation?: string | null
+          organization_id: string
+          potential_roles?: string[]
+          raw_data?: Json
+          source_system: string
+          strengths?: string[]
+          updated_at?: string
+          visibility?: string
+        }
+        Update: {
+          client_id?: string
+          confidence?: number | null
+          created_at?: string
+          development_directions?: string[]
+          id?: string
+          interpretation?: string | null
+          organization_id?: string
+          potential_roles?: string[]
+          raw_data?: Json
+          source_system?: string
+          strengths?: string[]
+          updated_at?: string
+          visibility?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "purpose_profiles_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purpose_profiles_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      purpose_syntheses: {
+        Row: {
+          client_id: string
+          created_at: string
+          cross_system_matches: string[]
+          id: string
+          organization_id: string
+          potential_conflicts: string[]
+          recommended_development_vectors: string[]
+          summary: string | null
+          updated_at: string
+        }
+        Insert: {
+          client_id: string
+          created_at?: string
+          cross_system_matches?: string[]
+          id?: string
+          organization_id: string
+          potential_conflicts?: string[]
+          recommended_development_vectors?: string[]
+          summary?: string | null
+          updated_at?: string
+        }
+        Update: {
+          client_id?: string
+          created_at?: string
+          cross_system_matches?: string[]
+          id?: string
+          organization_id?: string
+          potential_conflicts?: string[]
+          recommended_development_vectors?: string[]
+          summary?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "purpose_syntheses_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purpose_syntheses_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recommendation_targets: {
+        Row: {
+          created_at: string
+          expected_effect: string | null
+          id: string
+          recommendation_id: string
+          role: string
+          target_id: string
+          target_type: string | null
+        }
+        Insert: {
+          created_at?: string
+          expected_effect?: string | null
+          id?: string
+          recommendation_id: string
+          role: string
+          target_id: string
+          target_type?: string | null
+        }
+        Update: {
+          created_at?: string
+          expected_effect?: string | null
+          id?: string
+          recommendation_id?: string
+          role?: string
+          target_id?: string
+          target_type?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recommendation_targets_recommendation_id_fkey"
+            columns: ["recommendation_id"]
+            isOneToOne: false
+            referencedRelation: "recommendations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      recommendations: {
+        Row: {
+          activation_score: number | null
+          client_id: string
+          client_relevance_score: number | null
+          client_request_id: string | null
+          confidence_score: number | null
+          created_at: string
+          created_by: string | null
+          final_priority_score: number | null
+          human_review_required: boolean
+          id: string
+          impact_score: number | null
+          missing_evidence: string[]
+          organization_id: string
+          proposed_correction: string
+          rank_rationale: string | null
+          rationale: string | null
+          readiness_score: number | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          risk_notes: string | null
+          risk_score: number | null
+          rootness_score: number | null
+          scoring_model_version: string | null
+          status: string
+          systemic_leverage_score: number | null
+          unlock_score: number | null
+          updated_at: string
+          visibility: string
+        }
+        Insert: {
+          activation_score?: number | null
+          client_id: string
+          client_relevance_score?: number | null
+          client_request_id?: string | null
+          confidence_score?: number | null
+          created_at?: string
+          created_by?: string | null
+          final_priority_score?: number | null
+          human_review_required?: boolean
+          id?: string
+          impact_score?: number | null
+          missing_evidence?: string[]
+          organization_id: string
+          proposed_correction: string
+          rank_rationale?: string | null
+          rationale?: string | null
+          readiness_score?: number | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          risk_notes?: string | null
+          risk_score?: number | null
+          rootness_score?: number | null
+          scoring_model_version?: string | null
+          status?: string
+          systemic_leverage_score?: number | null
+          unlock_score?: number | null
+          updated_at?: string
+          visibility?: string
+        }
+        Update: {
+          activation_score?: number | null
+          client_id?: string
+          client_relevance_score?: number | null
+          client_request_id?: string | null
+          confidence_score?: number | null
+          created_at?: string
+          created_by?: string | null
+          final_priority_score?: number | null
+          human_review_required?: boolean
+          id?: string
+          impact_score?: number | null
+          missing_evidence?: string[]
+          organization_id?: string
+          proposed_correction?: string
+          rank_rationale?: string | null
+          rationale?: string | null
+          readiness_score?: number | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          risk_notes?: string | null
+          risk_score?: number | null
+          rootness_score?: number | null
+          scoring_model_version?: string | null
+          status?: string
+          systemic_leverage_score?: number | null
+          unlock_score?: number | null
+          updated_at?: string
+          visibility?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recommendations_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recommendations_client_request_id_fkey"
+            columns: ["client_request_id"]
+            isOneToOne: false
+            referencedRelation: "client_requests"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "recommendations_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      relationship_dynamics: {
+        Row: {
+          confidence_score: number | null
+          created_at: string
+          description: string | null
+          evidence_refs: string[]
+          id: string
+          relationship_id: string
+          title: string
+          updated_at: string
+          visibility: string
+        }
+        Insert: {
+          confidence_score?: number | null
+          created_at?: string
+          description?: string | null
+          evidence_refs?: string[]
+          id?: string
+          relationship_id: string
+          title: string
+          updated_at?: string
+          visibility?: string
+        }
+        Update: {
+          confidence_score?: number | null
+          created_at?: string
+          description?: string | null
+          evidence_refs?: string[]
+          id?: string
+          relationship_id?: string
+          title?: string
+          updated_at?: string
+          visibility?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "relationship_dynamics_relationship_id_fkey"
+            columns: ["relationship_id"]
+            isOneToOne: false
+            referencedRelation: "relationships"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      relationships: {
+        Row: {
+          client_a_id: string
+          client_b_id: string
+          created_at: string
+          id: string
+          organization_id: string
+          relationship_type: string
+          updated_at: string
+        }
+        Insert: {
+          client_a_id: string
+          client_b_id: string
+          created_at?: string
+          id?: string
+          organization_id: string
+          relationship_type: string
+          updated_at?: string
+        }
+        Update: {
+          client_a_id?: string
+          client_b_id?: string
+          created_at?: string
+          id?: string
+          organization_id?: string
+          relationship_type?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "relationships_client_a_id_fkey"
+            columns: ["client_a_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "relationships_client_b_id_fkey"
+            columns: ["client_b_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "relationships_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      resources: {
+        Row: {
+          client_id: string
+          confidence_score: number | null
+          created_at: string
+          description: string | null
+          domain: string | null
+          evidence_refs: string[]
+          evidence_summary: string | null
+          id: string
+          name: string
+          organization_id: string
+          review_status: string
+          status: string
+          strength_score: number | null
+          trend: string | null
+          updated_at: string
+          visibility: string
+        }
+        Insert: {
+          client_id: string
+          confidence_score?: number | null
+          created_at?: string
+          description?: string | null
+          domain?: string | null
+          evidence_refs?: string[]
+          evidence_summary?: string | null
+          id?: string
+          name: string
+          organization_id: string
+          review_status?: string
+          status?: string
+          strength_score?: number | null
+          trend?: string | null
+          updated_at?: string
+          visibility?: string
+        }
+        Update: {
+          client_id?: string
+          confidence_score?: number | null
+          created_at?: string
+          description?: string | null
+          domain?: string | null
+          evidence_refs?: string[]
+          evidence_summary?: string | null
+          id?: string
+          name?: string
+          organization_id?: string
+          review_status?: string
+          status?: string
+          strength_score?: number | null
+          trend?: string | null
+          updated_at?: string
+          visibility?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "resources_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "resources_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      signal_theme_links: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          link_rationale: string | null
+          relevance_score: number | null
+          signal_id: string
+          theme_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          link_rationale?: string | null
+          relevance_score?: number | null
+          signal_id: string
+          theme_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          link_rationale?: string | null
+          relevance_score?: number | null
+          signal_id?: string
+          theme_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "signal_theme_links_signal_id_fkey"
+            columns: ["signal_id"]
+            isOneToOne: false
+            referencedRelation: "signals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "signal_theme_links_theme_id_fkey"
+            columns: ["theme_id"]
+            isOneToOne: false
+            referencedRelation: "themes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       signals: {
         Row: {
           archived_at: string | null
@@ -1047,6 +2086,196 @@ export type Database = {
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      theme_core_node_links: {
+        Row: {
+          confidence: number | null
+          core_node_id: string
+          created_at: string
+          created_by: string | null
+          id: string
+          link_rationale: string | null
+          relationship_type: string
+          theme_id: string
+        }
+        Insert: {
+          confidence?: number | null
+          core_node_id: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          link_rationale?: string | null
+          relationship_type: string
+          theme_id: string
+        }
+        Update: {
+          confidence?: number | null
+          core_node_id?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          link_rationale?: string | null
+          relationship_type?: string
+          theme_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "theme_core_node_links_core_node_id_fkey"
+            columns: ["core_node_id"]
+            isOneToOne: false
+            referencedRelation: "core_nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "theme_core_node_links_theme_id_fkey"
+            columns: ["theme_id"]
+            isOneToOne: false
+            referencedRelation: "themes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      themes: {
+        Row: {
+          activity_score: number | null
+          archived_at: string | null
+          client_id: string
+          confidence_score: number | null
+          contexts_count: number
+          created_at: string
+          description: string | null
+          domain: string | null
+          evidence_count: number
+          first_seen_at: string | null
+          id: string
+          independent_evidence_count: number
+          last_seen_at: string | null
+          name: string
+          organization_id: string
+          review_status: string
+          status: string
+          trend: string | null
+          updated_at: string
+          visibility: string
+        }
+        Insert: {
+          activity_score?: number | null
+          archived_at?: string | null
+          client_id: string
+          confidence_score?: number | null
+          contexts_count?: number
+          created_at?: string
+          description?: string | null
+          domain?: string | null
+          evidence_count?: number
+          first_seen_at?: string | null
+          id?: string
+          independent_evidence_count?: number
+          last_seen_at?: string | null
+          name: string
+          organization_id: string
+          review_status?: string
+          status?: string
+          trend?: string | null
+          updated_at?: string
+          visibility?: string
+        }
+        Update: {
+          activity_score?: number | null
+          archived_at?: string | null
+          client_id?: string
+          confidence_score?: number | null
+          contexts_count?: number
+          created_at?: string
+          description?: string | null
+          domain?: string | null
+          evidence_count?: number
+          first_seen_at?: string | null
+          id?: string
+          independent_evidence_count?: number
+          last_seen_at?: string | null
+          name?: string
+          organization_id?: string
+          review_status?: string
+          status?: string
+          trend?: string | null
+          updated_at?: string
+          visibility?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "themes_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "themes_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      trigger_activations: {
+        Row: {
+          activation_delta: number | null
+          confidence: number | null
+          core_node_id: string | null
+          created_at: string
+          created_by: string | null
+          id: string
+          rationale: string | null
+          theme_id: string | null
+          trigger_id: string
+        }
+        Insert: {
+          activation_delta?: number | null
+          confidence?: number | null
+          core_node_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          rationale?: string | null
+          theme_id?: string | null
+          trigger_id: string
+        }
+        Update: {
+          activation_delta?: number | null
+          confidence?: number | null
+          core_node_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          rationale?: string | null
+          theme_id?: string | null
+          trigger_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trigger_activations_core_node_id_fkey"
+            columns: ["core_node_id"]
+            isOneToOne: false
+            referencedRelation: "core_nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trigger_activations_theme_id_fkey"
+            columns: ["theme_id"]
+            isOneToOne: false
+            referencedRelation: "themes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trigger_activations_trigger_id_fkey"
+            columns: ["trigger_id"]
+            isOneToOne: false
+            referencedRelation: "triggers"
             referencedColumns: ["id"]
           },
         ]
