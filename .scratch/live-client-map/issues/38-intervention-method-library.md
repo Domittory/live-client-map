@@ -8,7 +8,7 @@
 
 **Blocked by:** 10 — Supabase/API foundation; 13 — consent gates.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 ## Concrete steps
 

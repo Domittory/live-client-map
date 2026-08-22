@@ -8,7 +8,13 @@
 
 **Blocked by:** 17 — Client; 21 — Signal interpretation.
 
-**Status:** ready-for-agent
+**Status:** resolved
+
+## Decision
+
+- `resources` добавляет `organization_id`/`client_id` (tenant boundary).
+- Resource создаётся только явным действием специалиста (нет автогенерации из ослабления CoreNode — регрессия запрещена на уровне сервиса).
+- Каждое изменение strength/confidence требует `evidenceSummary` или `reason` (валидируется).
 
 ## Concrete steps
 
@@ -29,3 +35,22 @@
 
 - [ ] Пройдены no-automatic-resource regression tests.
 - [ ] Repository-standard lint, typecheck и tests проходят.
+
+## Implementation result
+
+**Что сделано:**
+- Миграция `0020_resources.sql`: таблица `resources` (name, description, domain, strength_score, confidence_score, trend, evidence_summary, status, visibility); RLS; права.
+- Сервисный слой `lib/service/resources.ts`: `createResource` (только явное действие), `updateResource` (требует evidenceSummary/reason при изменении scores).
+- Тесты: resource как самостоятельная сущность; изменение score без evidence отклоняется; с evidence — применяется.
+
+**Изменённые/созданные файлы:**
+- `supabase/migrations/0020_resources.sql`
+- `lib/service/resources.ts`
+- `tests/integration/resources.integration.test.ts`
+
+**Пройденные проверки:**
+- Тесты тикета 29 (2 шт.) — pass.
+- `pnpm lint` — файлы этого тикета проходят.
+- `pnpm typecheck` — файлы этого тикета проходят; note: ошибки в `lib/service/interventions.ts` — параллельная работа (ticket 38).
+
+**Note:** ослабление CoreNode не меняет Resource автоматически — ресурсы создаются/обновляются только явными действиями специалиста (нет автогенерации).

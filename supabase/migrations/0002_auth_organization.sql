@@ -149,7 +149,7 @@ grant select on public.organization_members to anon, authenticated;
 grant select, insert, update on public.profiles to authenticated;
 
 -- Future tables/functions created by the migration owner inherit these grants.
-alter default privileges in schema public grant select on tables to anon, authenticated;
-alter default privileges in schema public grant select, insert, update, delete on tables to authenticated;
-alter default privileges in schema public grant execute on functions to anon, authenticated;
-alter default privileges in schema public grant usage, select on sequences to authenticated;
+alter default privileges in schema public grant select on tables to anon, authenticated, service_role;
+alter default privileges in schema public grant select, insert, update, delete on tables to authenticated, service_role;
+alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;
+alter default privileges in schema public grant usage, select on sequences to authenticated, service_role;

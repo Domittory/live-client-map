@@ -8,7 +8,33 @@
 
 **Blocked by:** 10 — Supabase/API foundation; 11 — authenticated actor.
 
-**Status:** ready-for-agent
+**Status:** resolved
+
+## Implementation result
+
+**Что сделано:**
+- Миграция `0005_audit_log.sql`: append-only таблица `audit_log` (SPEC §8.33: actor, entity_type/entity_id, action, before_data/after_data, reason, ip_address, user_agent, created_at).
+- Единый write-path: `append_audit(...)` (security definer, `set search_path = public`) — записывает реального `auth.uid()` как actor, проверяет membership; прямой INSERT в таблицу ролям не выдан.
+- Append-only на уровне БД: триггер `audit_log_immutable` запрещает UPDATE/DELETE всем ролям, включая service_role.
+- RLS: читает audit log только Owner организации; service_role сохраняет privileged read для поддержки платформы.
+- Service layer `lib/service/audit.ts`: `recordAudit` (Zod-валидация + вызов RPC), `withAudit` (reusable mutation wrapper: mutation + before/after/actor/reason одной точкой входа), `sanitizeAuditPayload` (рекурсивная редакция password/secret/token/api_key/authorization/cookie/session), `listAuditLog` (owner-only, фильтры entityType/entityId/actorId/action/from/to, cursor-пагинация).
+- Механизм подключён к первому downstream consumer: мутации онтологии из тикета 16 (`createOrgDomain`, `createOrgBeliefTemplate`, `archiveOrgDomain`, `archiveOrgBeliefTemplate`) теперь пишут audit через wrapper.
+- Owner viewer: API `GET /api/audit-log` и UI `/audit` (фильтры + пагинация, не-владельцу — явный отказ), ссылка с главной.
+- `lib/supabase/database.types.ts` перегенерирован из живой базы.
+
+**Изменённые/созданные файлы:**
+- `supabase/migrations/0005_audit_log.sql`
+- `lib/service/audit.ts`, `lib/service/ontology.ts`, `lib/supabase/database.types.ts`
+- `app/api/audit-log/route.ts`, `app/audit/page.tsx`, `app/page.tsx`
+- `tests/unit/audit.unit.test.ts`, `tests/integration/audit.integration.test.ts`
+
+**Пройденные проверки:**
+- `supabase db reset` — чистая пересборка (0001–0005) OK
+- `pnpm lint` — pass
+- `pnpm typecheck` — pass
+- `pnpm test` — 49 passed (в т.ч. audit integration: successful/rejected/privileged/append-only/owner-viewer)
+- `pnpm build` — production build OK
+- `pnpm test:e2e` — 2 passed
 
 ## Concrete steps
 

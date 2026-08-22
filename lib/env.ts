@@ -8,6 +8,10 @@ const clientEnvSchema = z.object({
 const serverEnvSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   SUPABASE_DB_URL: z.string().min(1).optional(),
+  // AI gateway (ticket 32): server-only. Absent key => FakeAiProvider.
+  OPENAI_API_KEY: z.string().min(1).optional(),
+  AI_PROVIDER: z.enum(["fake", "openai"]).default("fake"),
+  AI_PRODUCTION_ENABLED: z.enum(["true", "false"]).default("false"),
 });
 
 export type ClientEnv = z.infer<typeof clientEnvSchema>;
@@ -33,5 +37,8 @@ export function getServerEnv(): ServerEnv {
   return serverEnvSchema.parse({
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
     SUPABASE_DB_URL: process.env.SUPABASE_DB_URL,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    AI_PROVIDER: process.env.AI_PROVIDER,
+    AI_PRODUCTION_ENABLED: process.env.AI_PRODUCTION_ENABLED,
   });
 }

@@ -69,3 +69,23 @@ Never run destructive commands without explicit approval:
 - git push
 - database destructive migrations
 - deleting project files
+
+## Ticket assignment priority
+
+If user explicitly assigns a ticket number:
+- work only on that ticket;
+- do not switch to another ticket automatically;
+- if blocked, stop and explain blockers.
+
+Automatic ticket ordering applies only when no ticket number was explicitly assigned.
+
+If multiple agents are working:
+
+Do not assume all previous ticket numbers are available.
+
+Before taking a ticket:
+- check Status;
+- check Blocked by;
+- check if another agent already modified related files.
+
+Never take a ticket assigned to another agent.

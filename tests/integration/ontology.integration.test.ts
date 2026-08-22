@@ -104,10 +104,11 @@ describe.skipIf(!available)("ontology & diagnostic library (requires local Supab
       .single();
 
     // Org A extends the library with its own domain.
+    const orgASlug = `org-a-domain-${Math.random().toString(36).slice(2, 8)}`;
     const { error: insertError } = await clientA.from("diagnostic_domains").insert({
       organization_id: tenantA.orgId,
       ontology_version_id: version!.id,
-      slug: "org-a-domain",
+      slug: orgASlug,
       name: "Домен организации A",
       is_system: false,
     });
@@ -117,7 +118,7 @@ describe.skipIf(!available)("ontology & diagnostic library (requires local Supab
     const { data: visibleToB } = await clientB.from("diagnostic_domains").select("slug");
     const slugsB = (visibleToB ?? []).map((d) => d.slug);
     expect(slugsB).toContain("separation");
-    expect(slugsB).not.toContain("org-a-domain");
+    expect(slugsB).not.toContain(orgASlug);
 
     // System records cannot be modified by an org member.
     const { data: updated } = await clientA
@@ -147,7 +148,7 @@ describe.skipIf(!available)("ontology & diagnostic library (requires local Supab
     const { data: domainA } = await admin
       .from("diagnostic_domains")
       .select("id")
-      .eq("slug", "org-a-domain")
+      .eq("slug", orgASlug)
       .single();
     const { error: crossError } = await clientB.from("belief_templates").insert({
       organization_id: tenantB.orgId,
@@ -208,8 +209,9 @@ describe.skipIf(!available)("ontology & diagnostic library (requires local Supab
     const admin = createClient(url!, serviceKey!, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
+    const archivedVersion = `0.9.0-test-${Math.random().toString(36).slice(2, 8)}`;
     const { error: archiveError } = await admin.from("ontology_versions").insert({
-      version: "0.9.0",
+      version: archivedVersion,
       status: "archived",
       archived_at: new Date().toISOString(),
     });
@@ -220,7 +222,7 @@ describe.skipIf(!available)("ontology & diagnostic library (requires local Supab
     const { data, error } = await client
       .from("ontology_versions")
       .select("version, status")
-      .eq("version", "0.9.0")
+      .eq("version", archivedVersion)
       .single();
     expect(error).toBeNull();
     expect(data!.status).toBe("archived");

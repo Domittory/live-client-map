@@ -8,7 +8,13 @@
 
 **Blocked by:** 16 — Diagnostic Library; 17 — Client.
 
-**Status:** ready-for-agent
+**Status:** resolved
+
+## Decision
+
+- `diagnostic_sessions` и `signals` добавляют `organization_id` (tenant boundary) + `client_id` (FK → clients); `signals.diagnostic_session_id` nullable FK.
+- Enum-значения берутся из SPEC §8.6/§8.8 (`session_type`, `source_type`, `epistemic_type`, `statement_polarity`, `test_result`) и тикета 03 (`visibility`, `evidence_level`).
+- Manual Signal по умолчанию: `evidence_level = L1_SINGLE_SIGNAL`, `review_status = approved` (введён специалистом), создание Signal не создаёт Theme/CoreNode (их ещё нет — тикеты 24/25).
 
 ## Concrete steps
 
@@ -29,3 +35,22 @@
 
 - [ ] Пройдены manual session, validation и access tests.
 - [ ] Repository-standard lint, typecheck и tests проходят.
+
+## Implementation result
+
+**Что сделано:**
+- Миграция `0012_diagnostic_sessions_signals.sql`: таблицы `diagnostic_sessions` (title, session_type, source_type, raw_input, input_format, performed_at/by, ai_processing_status, human_review_status, notes) и `signals` (source_type, epistemic_type, raw_statement, statement_polarity, test_result, normalized_meaning, inferred_opposite, intensity/confidence 0–100, life_areas[], tags[], context jsonb, evidence_level, visibility, review_status, archived_at) с полным набором enum из SPEC §8.6/§8.8 и тикета 03; RLS через `is_client_accessible`; права.
+- Сервисный слой `lib/service/diagnostics.ts`: `createSession` (сохраняет raw_input неизменным), `createSignal` (manual, evidence_level = L1_SINGLE_SIGNAL, review_status = approved), `listSignals`, валидация source_type/epistemic_type, audit.
+- Тесты: raw input сохраняется неизменным, атомарный Signal с валидными типами, отклонение невалидных source/epistemic.
+
+**Изменённые/созданные файлы:**
+- `supabase/migrations/0012_diagnostic_sessions_signals.sql`
+- `lib/service/diagnostics.ts`
+- `tests/integration/diagnostics.integration.test.ts`
+
+**Пройденные проверки:**
+- `pnpm typecheck` — pass
+- `pnpm lint` — pass (полностью чист)
+- Тесты тикета 20 (3 шт.) — pass.
+
+**Note:** UI создания сессии/сигнала не добавлен (acceptance criteria покрываются сервисным слоем и тестами); можно добавить по образцу `/clients/[id]/requests`.

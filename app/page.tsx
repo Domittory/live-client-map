@@ -36,6 +36,12 @@ export default async function Home() {
       <p>
         <Link href="/library">Диагностическая библиотека</Link>
       </p>
+      <p>
+        <Link href="/audit">Audit log</Link>
+      </p>
+      <p>
+        <Link href="/admin">Администрирование</Link>
+      </p>
       <form action={signOut}>
         <button type="submit">Выйти</button>
       </form>

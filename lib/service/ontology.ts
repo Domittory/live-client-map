@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { Tables } from "@/lib/supabase/database.types";
+import { recordAudit, withAudit } from "./audit";
 import { ServiceError } from "./errors";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
 import { uuid, validate } from "./validation";
@@ -217,6 +218,13 @@ export async function createOrgDomain(
     }
     throw new ServiceError("INTERNAL_ERROR", "Failed to create domain");
   }
+  await recordAudit(client, {
+    organizationId: input.organizationId,
+    entityType: "diagnostic_domain",
+    entityId: (data as DiagnosticDomain).id,
+    action: "diagnostic_domain.create",
+    after: data,
+  });
   return data as DiagnosticDomain;
 }
 
@@ -262,35 +270,88 @@ export async function createOrgBeliefTemplate(
     .single();
 
   if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to create belief template");
+  await recordAudit(client, {
+    organizationId: input.organizationId,
+    entityType: "belief_template",
+    entityId: (data as BeliefTemplate).id,
+    action: "belief_template.create",
+    after: data,
+  });
   return data as BeliefTemplate;
 }
 
 /** Soft delete (ticket 03): org records are archived, never hard-deleted here. */
 export async function archiveOrgDomain(client: SupabaseClient, domainId: string): Promise<void> {
-  const { data } = await client
+  const { data: domain } = await client
     .from("diagnostic_domains")
-    .update({ archived_at: new Date().toISOString() })
+    .select("*")
     .eq("id", domainId)
     .eq("is_system", false)
     .is("archived_at", null)
-    .select("id");
-  if (!data || data.length === 0) {
-    throw new ServiceError("NOT_FOUND", "Domain not found or not editable");
-  }
+    .maybeSingle();
+  if (!domain) throw new ServiceError("NOT_FOUND", "Domain not found or not editable");
+
+  const archivedAt = new Date().toISOString();
+  await withAudit(
+    client,
+    {
+      organizationId: domain.organization_id,
+      entityType: "diagnostic_domain",
+      entityId: domain.id,
+      action: "diagnostic_domain.archive",
+      before: domain,
+      after: { ...domain, archived_at: archivedAt },
+    },
+    async () => {
+      const { data, error } = await client
+        .from("diagnostic_domains")
+        .update({ archived_at: archivedAt })
+        .eq("id", domainId)
+        .eq("is_system", false)
+        .is("archived_at", null)
+        .select("id");
+      if (error || !data || data.length === 0) {
+        throw new ServiceError("NOT_FOUND", "Domain not found or not editable");
+      }
+    }
+  );
 }
 
 export async function archiveOrgBeliefTemplate(
   client: SupabaseClient,
   templateId: string
 ): Promise<void> {
-  const { data } = await client
+  const { data: template } = await client
     .from("belief_templates")
-    .update({ archived_at: new Date().toISOString() })
+    .select("*")
     .eq("id", templateId)
     .eq("is_system", false)
     .is("archived_at", null)
-    .select("id");
-  if (!data || data.length === 0) {
-    throw new ServiceError("NOT_FOUND", "Belief template not found or not editable");
-  }
+    .maybeSingle();
+  if (!template) throw new ServiceError("NOT_FOUND", "Belief template not found or not editable");
+
+  const archivedAt = new Date().toISOString();
+  await withAudit(
+    client,
+    {
+      organizationId: template.organization_id,
+      entityType: "belief_template",
+      entityId: template.id,
+      action: "belief_template.archive",
+      before: template,
+      after: { ...template, archived_at: archivedAt },
+    },
+    async () => {
+      const { data, error } = await client
+        .from("belief_templates")
+        .update({ archived_at: archivedAt })
+        .eq("id", templateId)
+        .eq("is_system", false)
+        .is("archived_at", null)
+        .select("id");
+      if (error || !data || data.length === 0) {
+        throw new ServiceError("NOT_FOUND", "Belief template not found or not editable");
+      }
+    }
+  );
 }
