@@ -43,6 +43,9 @@ export default async function Home() {
         <Link href="/corrections">Corrections</Link>
       </p>
       <p>
+        <Link href="/observations">Observations и маркеры</Link>
+      </p>
+      <p>
         <Link href="/audit">Audit log</Link>
       </p>
       <p>

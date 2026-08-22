@@ -183,6 +183,137 @@ export type Database = {
           },
         ]
       }
+      behavioral_marker_entries: {
+        Row: {
+          id: string
+          marker_id: string
+          note: string | null
+          recorded_at: string
+          recorded_by: string | null
+          value: number
+        }
+        Insert: {
+          id?: string
+          marker_id: string
+          note?: string | null
+          recorded_at?: string
+          recorded_by?: string | null
+          value: number
+        }
+        Update: {
+          id?: string
+          marker_id?: string
+          note?: string | null
+          recorded_at?: string
+          recorded_by?: string | null
+          value?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "behavioral_marker_entries_marker_id_fkey"
+            columns: ["marker_id"]
+            isOneToOne: false
+            referencedRelation: "behavioral_markers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      behavioral_markers: {
+        Row: {
+          baseline_value: number | null
+          client_id: string
+          created_at: string
+          current_value: number | null
+          description: string | null
+          id: string
+          life_area: string | null
+          linked_core_node_id: string | null
+          linked_resource_id: string | null
+          linked_theme_id: string | null
+          marker_type: string
+          name: string
+          organization_id: string
+          scale_max: number
+          scale_min: number
+          trend: string
+          updated_at: string
+        }
+        Insert: {
+          baseline_value?: number | null
+          client_id: string
+          created_at?: string
+          current_value?: number | null
+          description?: string | null
+          id?: string
+          life_area?: string | null
+          linked_core_node_id?: string | null
+          linked_resource_id?: string | null
+          linked_theme_id?: string | null
+          marker_type: string
+          name: string
+          organization_id: string
+          scale_max?: number
+          scale_min?: number
+          trend?: string
+          updated_at?: string
+        }
+        Update: {
+          baseline_value?: number | null
+          client_id?: string
+          created_at?: string
+          current_value?: number | null
+          description?: string | null
+          id?: string
+          life_area?: string | null
+          linked_core_node_id?: string | null
+          linked_resource_id?: string | null
+          linked_theme_id?: string | null
+          marker_type?: string
+          name?: string
+          organization_id?: string
+          scale_max?: number
+          scale_min?: number
+          trend?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "behavioral_markers_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "behavioral_markers_linked_core_node_id_fkey"
+            columns: ["linked_core_node_id"]
+            isOneToOne: false
+            referencedRelation: "core_nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "behavioral_markers_linked_resource_id_fkey"
+            columns: ["linked_resource_id"]
+            isOneToOne: false
+            referencedRelation: "resources"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "behavioral_markers_linked_theme_id_fkey"
+            columns: ["linked_theme_id"]
+            isOneToOne: false
+            referencedRelation: "themes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "behavioral_markers_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       belief_templates: {
         Row: {
           archived_at: string | null
@@ -1497,6 +1628,85 @@ export type Database = {
           },
         ]
       }
+      observations: {
+        Row: {
+          client_id: string
+          confidence: number
+          correction_id: string | null
+          created_at: string
+          created_by: string | null
+          date: string
+          description: string
+          id: string
+          intensity: number
+          life_areas: string[]
+          organization_id: string
+          source_type: string
+          supports_improvement: boolean
+          updated_at: string
+          valence: string
+          visibility: string
+        }
+        Insert: {
+          client_id: string
+          confidence: number
+          correction_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          date?: string
+          description: string
+          id?: string
+          intensity: number
+          life_areas?: string[]
+          organization_id: string
+          source_type: string
+          supports_improvement?: boolean
+          updated_at?: string
+          valence: string
+          visibility?: string
+        }
+        Update: {
+          client_id?: string
+          confidence?: number
+          correction_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          date?: string
+          description?: string
+          id?: string
+          intensity?: number
+          life_areas?: string[]
+          organization_id?: string
+          source_type?: string
+          supports_improvement?: boolean
+          updated_at?: string
+          valence?: string
+          visibility?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "observations_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "observations_correction_id_fkey"
+            columns: ["correction_id"]
+            isOneToOne: false
+            referencedRelation: "corrections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "observations_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ontology_versions: {
         Row: {
           archived_at: string | null
@@ -2617,6 +2827,15 @@ export type Database = {
       update_member_role: {
         Args: { p_org_id: string; p_role: string; p_user_id: string }
         Returns: undefined
+      }
+      validate_behavioral_marker_link: {
+        Args: {
+          p_client_id: string
+          p_link_id: string
+          p_link_type: string
+          p_organization_id: string
+        }
+        Returns: boolean
       }
       validate_correction_target: {
         Args: {
