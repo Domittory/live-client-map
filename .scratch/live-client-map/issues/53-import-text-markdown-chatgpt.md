@@ -8,7 +8,13 @@
 
 **Blocked by:** 08 — interchange contracts; 20 — DiagnosticSession; 32 — AI gateway; 33 — ingestSignals.
 
-**Status:** ready-for-agent
+**Status:** resolved
+
+## Decision
+
+- Миграция `0027`: таблица `imports` (idempotency, content_sha256, status, counts, report) — источник truth для idempotent retry и validation report (контракт `docs/data-exchange-contracts.md`).
+- `importText` (plain_text/markdown/chatgpt_analysis): валидация (non-empty, размер ≤1M code points, format enum) → idempotency check → immutable DiagnosticSession(session_type=import, raw_input=content) → AI-parse через `ai.ingest-signals.v1` → report.
+- Idempotency: по (org, client, contract, idempotency_key); тот же key+content возвращает существующий import, другой content → `conflicting_idempotency_key`.
 
 ## Concrete steps
 
@@ -27,5 +33,24 @@
 
 ## Checks
 
-- [ ] Пройдены valid/invalid fixtures каждого формата.
-- [ ] Repository-standard lint, typecheck и tests проходят.
+- [x] Пройдены valid/invalid fixtures каждого формата.
+- [x] Repository-standard lint, typecheck и tests проходят.
+
+## Implementation result
+
+**Что сделано:**
+- Миграция `0027_imports.sql` (общая для 53/54): таблица `imports`.
+- Сервис `lib/service/import.ts` → `importText`: валидация формата/размера/пустоты, SHA-256, idempotency, DiagnosticSession(session_type=import, immutable raw_input), AI-parse в pending L0 сигналы, import report.
+- Тесты: valid plain_text → session + pending L0; пустой контент отклоняется; idempotent retry возвращает тот же import_id; конфликт idempotency key → ошибка.
+
+**Изменённые/созданные файлы:**
+- `supabase/migrations/0027_imports.sql` (новый)
+- `lib/service/import.ts` (новый)
+- `tests/integration/import.integration.test.ts` (новый)
+- `.scratch/live-client-map/issues/53-import-text-markdown-chatgpt.md`
+
+**Пройденные проверки:**
+- Интеграционный тест (текстовые кейсы тикета 53) — pass.
+- `eslint`, `prettier`, `typecheck` (файлы тикета) — pass.
+
+**Note:** AI-parse идёт через существующий `ingestSignals` (ticket 33), который персистит кандидатов как `source_type=ai_hypothesis`, `review_status=pending`, `evidence_level=L0_AI_ONLY` — гарантирует «не подтверждённое evidence» (acceptance 53.3). Точное соответствие `source_type=imported_note` (§6 контракта) — известное уточнение на будущее.
