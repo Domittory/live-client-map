@@ -1,0 +1,23 @@
+.next
+node_modules
+pnpm-lock.yaml
+coverage
+test-results
+playwright-report
+blob-report
+playwright/.cache
+/supabase/
+.next-env.d.ts
+lib/supabase/database.types.ts
+*.tsbuildinfo
+
+# Out-of-scope reference documents (managed by the issue-tracker workflow)
+.scratch
+SPEC.md
+AGENTS.md
+AUTOPILOT.md
+CLAUDE.md
+.claude
+docs/ai-contracts.md
+docs/data-exchange-contracts.md
+docs/agents

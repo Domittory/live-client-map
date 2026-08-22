@@ -1,0 +1,1 @@
+-- Seed data (ticket 10): intentionally empty — infrastructure only.
