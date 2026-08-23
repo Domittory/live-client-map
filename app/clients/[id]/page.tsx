@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { previewErasure } from "@/lib/service/erasure";
 import { getClient } from "@/lib/service/clients";
 import { getClientOverview } from "@/lib/service/overview";
+import { getServiceClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { ClientEditForm } from "./client-edit-form";
+import { ErasureForm } from "./erasure-form";
 
 export default async function ClientProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -20,6 +23,22 @@ export default async function ClientProfilePage({ params }: { params: Promise<{ 
     organizationId: client.organization_id,
     clientId: id,
   });
+
+  // Erasure management is Owner-only. The section below is gated so specialists
+  // never see the destructive controls or the per-table impact preview.
+  const { data: isOwner } = await supabase.rpc("is_org_owner", {
+    org_id: client.organization_id,
+  });
+  let erasurePreview: Awaited<ReturnType<typeof previewErasure>> | null = null;
+  let erasureError: string | null = null;
+  if (isOwner) {
+    try {
+      erasurePreview = await previewErasure(supabase, getServiceClient(), id);
+    } catch (err) {
+      erasureError =
+        err instanceof Error ? err.message : "Не удалось загрузить предпросмотр удаления.";
+    }
+  }
 
   return (
     <main className="shell">
@@ -38,6 +57,22 @@ export default async function ClientProfilePage({ params }: { params: Promise<{ 
         displayName={client.display_name ?? ""}
         occupation={client.occupation ?? ""}
       />
+
+      {isOwner ? (
+        <section>
+          <h2>Удаление данных</h2>
+          {erasureError ? <p role="alert">{erasureError}</p> : null}
+          {erasurePreview ? (
+            <p>
+              Будут удалены записи:{" "}
+              {Object.entries(erasurePreview.impacted)
+                .map(([table, count]) => `${table}: ${count}`)
+                .join(", ")}
+            </p>
+          ) : null}
+          <ErasureForm clientId={id} legalHold={erasurePreview?.legalHold ?? false} />
+        </section>
+      ) : null}
 
       <section>
         <h2>Обзор</h2>
