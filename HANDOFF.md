@@ -1,17 +1,16 @@
 # Handoff — «Живая карта клиента»
 
-Дата: 2026-08-23. Обновлено автономным агентом (Claude) после закрытия тикетов 49 (другим агентом), 56 и 58.
+Дата: 2026-08-23. Обновлено автономным агентом (Claude) после закрытия тикетов 49 (другим агентом), 56, 58 и 63.
 
 ## Статус тикетов
 
-- **Resolved: 01–59** (все до 59 включительно).
-  - Последние закрытые: 44 (`explainModelChanges`), 49 (`dynamics history UI`), 56 (`Markdown report + PDF snapshot`), 58 (`consent revocation + data erasure`).
-- **Ready-for-agent: 60–65** — финальная цепочка:
+- **Resolved: 01–63** (все до 63 включительно).
+  - Последние закрытые: 60 (`RLS privilege audit`), 61 (`runtime security/rate limits`), 62 (`monitoring/logging`), 63 (`backup/staging/production`).
+- **Ready-for-agent: 64–65** — финальная цепочка:
   ```
-  60 (RLS privilege audit) ─► 61 (runtime security/rate limits) ─► 62 (monitoring)
-                                                                    └─► 63 (backup/staging/prod) ─► 64 (acceptance) ─► 65 (prod readiness)
+  64 (universal acceptance tests) ─► 65 (production readiness journey)
   ```
-  Все зависимости 60–65 разблокированы (1–59 resolved).
+  Все зависимости 64–65 разблокированы (1–63 resolved).
 
 ## Окружение (важно после перезагрузки)
 
@@ -36,7 +35,8 @@
 - `0024`–`0027`, `0033`–`0035` — см. предыдущий handoff (ресурсы, рекомендации, relationships, imports, portal, feedback, safety).
 - `0036` — `model_explanations` (тикет 44).
 - `0037` — `erasure_requests` + `clients.legal_hold` + переопределение триггеров `audit_log_immutable`/`block_mutation` под session-флаг `app.data_erasure` (тикет 58).
-- **Следующая миграция — `0038`** (проверяйте `ls supabase/migrations/` перед созданием).
+- `0038` — `rls_privilege_audit` (тикет 60).
+- **Следующая миграция — `0039`** (проверяйте `ls supabase/migrations/` перед созданием). Тикет 63 миграций не добавлял — бэкапы через Supabase managed.
 
 ## Команды
 
@@ -71,11 +71,12 @@ supabase db reset      # пересборка локальной БД из ми�
 
 ## Открытые хвосты
 
-- **Export-файлы/retention (§10 контракта)** всё ещё не реализованы: доставка экспортов (JSON/CSV/report) синхронная, нет таблицы `export_requests`, файлового хранилища и 30-дневного retention. Естественно закрыть в тикете **63** (backup/storage) или отдельным тикетом — `erasure_requests.backup_marker` уже фиксирует для этого данные.
+- **Export-файлы/retention (§10 контракта)** всё ещё не реализованы: доставка экспортов (JSON/CSV/report) синхронная, нет таблицы `export_requests`, файлового хранилища и 30-дневного retention. В тикете 63 решено **вынести отдельным тикетом** — завести его следующим после 63; `erasure_requests.backup_marker` уже фиксирует для этого данные.
 - **Пароль восстановления и reset-password callback** (тикет 11) не завершены.
 - **`next@15.1.6`** имеет CVE (CVE-2025-66478) — обновить.
 
 ## Куда дальше
 
-- **60** (RLS privilege audit) → **61** (runtime security/rate limits) → **62** (monitoring/logging) → **63** (backup/staging/prod) → **64** (universal acceptance tests) → **65** (production readiness journey).
-- 60 разблокирован и не занят — следующий в автономном порядке.
+- **64** (universal acceptance tests) → **65** (production readiness journey).
+- 64 разблокирован и не занят — следующий в автономном порядке.
+- Отдельным тикетом после 63: **export-файлы/retention** (`export_requests` + 30-дневный retention).
