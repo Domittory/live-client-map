@@ -1442,6 +1442,82 @@ export type Database = {
           },
         ]
       }
+      follow_ups: {
+        Row: {
+          ai_assessment: Json | null
+          behavioral_result: Json | null
+          client_feedback: Json | null
+          client_id: string
+          completed_at: string | null
+          correction_id: string
+          created_at: string
+          created_by: string | null
+          id: string
+          organization_id: string
+          result_status: string
+          retest_result: Json | null
+          scheduled_at: string
+          specialist_assessment: Json | null
+          updated_at: string
+        }
+        Insert: {
+          ai_assessment?: Json | null
+          behavioral_result?: Json | null
+          client_feedback?: Json | null
+          client_id: string
+          completed_at?: string | null
+          correction_id: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id: string
+          result_status?: string
+          retest_result?: Json | null
+          scheduled_at: string
+          specialist_assessment?: Json | null
+          updated_at?: string
+        }
+        Update: {
+          ai_assessment?: Json | null
+          behavioral_result?: Json | null
+          client_feedback?: Json | null
+          client_id?: string
+          completed_at?: string | null
+          correction_id?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id?: string
+          result_status?: string
+          retest_result?: Json | null
+          scheduled_at?: string
+          specialist_assessment?: Json | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "follow_ups_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "follow_ups_correction_id_fkey"
+            columns: ["correction_id"]
+            isOneToOne: false
+            referencedRelation: "corrections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "follow_ups_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       imports: {
         Row: {
           client_id: string

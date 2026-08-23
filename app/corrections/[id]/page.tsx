@@ -1,8 +1,77 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getCorrection } from "@/lib/service/corrections";
+import { listFollowUps, type FollowUp } from "@/lib/service/follow-ups";
 import { createClient } from "@/lib/supabase/server";
 import { ArchiveCorrectionButton, UpdateCorrectionForm } from "../forms";
+import {
+  CancelFollowUpButton,
+  CompleteFollowUpForm,
+  EvaluateCorrectionButton,
+  ReviewAssessmentButtons,
+  ScheduleFollowUpForm,
+} from "./follow-ups-forms";
+
+function FollowUpCard({ followUp, canWrite }: { followUp: FollowUp; canWrite: boolean }) {
+  const assessment = followUp.ai_assessment;
+  return (
+    <li>
+      <p>
+        <strong>Статус:</strong> {followUp.result_status} | <strong>Запланирован:</strong>{" "}
+        {followUp.scheduled_at}
+        {followUp.completed_at ? (
+          <>
+            {" "}
+            | <strong>Заполнен:</strong> {followUp.completed_at}
+          </>
+        ) : null}
+      </p>
+      {followUp.retest_result ? <p>Retest: {followUp.retest_result.summary}</p> : null}
+      {followUp.behavioral_result ? (
+        <p>Поведенческий результат: {followUp.behavioral_result.summary}</p>
+      ) : null}
+      {followUp.client_feedback ? <p>Отзыв клиента: {followUp.client_feedback.summary}</p> : null}
+      {followUp.specialist_assessment ? (
+        <p>Оценка специалиста: {followUp.specialist_assessment.summary}</p>
+      ) : null}
+      {assessment ? (
+        <section>
+          <p>
+            <strong>AI-оценка ({assessment.approval_status}):</strong>{" "}
+            {assessment.proposed_result_status}
+            {assessment.confidence !== null ? `, confidence ${assessment.confidence}` : ""}
+            {assessment.source === "deterministic_guard" ? " (недостаточно данных)" : ""}
+          </p>
+          <p>{assessment.rationale}</p>
+          {assessment.missing_evidence.length > 0 ? (
+            <p>Недостающие данные: {assessment.missing_evidence.join(", ")}</p>
+          ) : null}
+          {assessment.proposed_core_node_status ? (
+            <p>
+              Предложенный статус CoreNode (не применяется): {assessment.proposed_core_node_status}
+            </p>
+          ) : null}
+          {canWrite && assessment.approval_status === "pending" ? (
+            <ReviewAssessmentButtons
+              followUpId={followUp.id}
+              correctionId={followUp.correction_id}
+              proposedStatus={assessment.proposed_result_status}
+            />
+          ) : null}
+        </section>
+      ) : null}
+      {canWrite && followUp.result_status === "scheduled" ? (
+        <>
+          <CompleteFollowUpForm followUpId={followUp.id} correctionId={followUp.correction_id} />
+          <CancelFollowUpButton followUpId={followUp.id} correctionId={followUp.correction_id} />
+        </>
+      ) : null}
+      {canWrite && followUp.result_status === "completed" && !assessment ? (
+        <EvaluateCorrectionButton followUpId={followUp.id} correctionId={followUp.correction_id} />
+      ) : null}
+    </li>
+  );
+}
 
 export default async function CorrectionDetailPage({
   params,
@@ -33,6 +102,12 @@ export default async function CorrectionDetailPage({
   } catch {
     notFound();
   }
+
+  const followUps = await listFollowUps(supabase, {
+    organizationId: correction.organization_id,
+    correctionId: correction.id,
+    limit: 50,
+  });
 
   return (
     <main className="shell">
@@ -103,6 +178,26 @@ export default async function CorrectionDetailPage({
                 {marker.baseline_value ? <> baseline {marker.baseline_value}</> : null}
                 {marker.target_value ? <> → {marker.target_value}</> : null}
               </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section>
+        <h2>Follow-ups</h2>
+        {canWrite && (correction.status === "in_progress" || correction.status === "completed") ? (
+          <ScheduleFollowUpForm
+            organizationId={correction.organization_id}
+            clientId={correction.client_id}
+            correctionId={correction.id}
+          />
+        ) : null}
+        {followUps.items.length === 0 ? (
+          <p>Follow-ups пока нет.</p>
+        ) : (
+          <ul>
+            {followUps.items.map((followUp) => (
+              <FollowUpCard key={followUp.id} followUp={followUp} canWrite={canWrite} />
             ))}
           </ul>
         )}
