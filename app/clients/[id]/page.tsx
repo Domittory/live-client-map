@@ -52,6 +52,16 @@ export default async function ClientProfilePage({ params }: { params: Promise<{ 
         <p>Приватная заметка: {client.specialist_notes_private}</p>
       )}
 
+      <section>
+        <h2>Работа с клиентом</h2>
+        <p>
+          <Link href={`/clients/${id}/requests`}>Запросы и цели →</Link>
+        </p>
+        <p>
+          <Link href={`/clients/${id}/map`}>Живая карта →</Link>
+        </p>
+      </section>
+
       <ClientEditForm
         clientId={id}
         displayName={client.display_name ?? ""}

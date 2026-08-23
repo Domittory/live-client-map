@@ -21,7 +21,7 @@ export function ClientEditForm({
 
   return (
     <div>
-      <h2>Редактировать</h2>
+      <h2>Профиль клиента</h2>
       <form action={updateAction}>
         <input type="hidden" name="id" value={clientId} />
         <label>
