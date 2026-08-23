@@ -24,6 +24,48 @@ export const linkThemeSchema = z
   })
   .strict();
 
+export interface CoreNode {
+  id: string;
+  organization_id: string;
+  client_id: string;
+  title: string;
+  hypothesis: string | null;
+  root_domain: string | null;
+  strength_score: number | null;
+  confidence_score: number | null;
+  impact_score: number | null;
+  activation_score: number | null;
+  rootness_score: number | null;
+  client_relevance_score: number | null;
+  readiness_score: number | null;
+  unlock_score: number | null;
+  risk_score: number | null;
+  evidence_count: number;
+  independent_evidence_count: number;
+  contexts_count: number;
+  status: string;
+  trend: string | null;
+  visibility: string;
+  created_by: string | null;
+  last_confirmed_by: string | null;
+  created_at: string;
+  updated_at: string;
+  last_confirmed_at: string | null;
+  archived_at: string | null;
+}
+
+/** Read one core node (RLS-enforced). */
+export async function getCoreNode(client: SupabaseClient, nodeId: string): Promise<CoreNode> {
+  const { data, error } = await client
+    .from("core_nodes")
+    .select("*")
+    .eq("id", validate(uuid, nodeId))
+    .maybeSingle();
+  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to read core node");
+  if (!data) throw new ServiceError("NOT_FOUND", "Core node not found");
+  return data as CoreNode;
+}
+
 export async function createCoreNode(
   client: SupabaseClient,
   organizationId: string,

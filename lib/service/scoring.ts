@@ -33,6 +33,38 @@ export function clampScore(value: number): number {
   return Math.min(100, Math.max(0, value));
 }
 
+/**
+ * Versioned reactivation configuration (SPEC §24, ticket 06 resolution,
+ * ticket 42). A weakened CoreNode is proposed for reactivation when the
+ * recomputed activation_score reaches `activationThreshold` AND the increase
+ * over the weakened score is at least `minIncrease` (ticket 06 fixes the
+ * default at ≥ 30; SPEC §24 leaves the threshold configurable).
+ *
+ * Only evidence created within the last `freshEvidenceWindowDays` days counts
+ * ("свежие Signals", ticket 06 uses the same 30-day activity window as trend);
+ * older evidence is stale and ignored. AI-only evidence (L0_AI_ONLY) never
+ * counts (SPEC §3.5). Each fresh eligible Signal contributes `signalPoints`;
+ * each fresh TriggerActivation contributes its `activation_delta`.
+ *
+ * Changing any value requires bumping `version`; every reactivation proposal
+ * stores the version and full calculation it was produced with.
+ */
+export interface ReactivationConfig {
+  version: string;
+  activationThreshold: number;
+  minIncrease: number;
+  freshEvidenceWindowDays: number;
+  signalPoints: number;
+}
+
+export const REACTIVATION_CONFIG: ReactivationConfig = {
+  version: SCORING_MODEL_VERSION,
+  activationThreshold: 60,
+  minIncrease: 30,
+  freshEvidenceWindowDays: 30,
+  signalPoints: 10,
+};
+
 function round1(value: number): number {
   return Math.round(value * 10) / 10;
 }

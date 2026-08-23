@@ -109,6 +109,20 @@ export default async function CorrectionDetailPage({
     limit: 50,
   });
 
+  // Core node targets: show current status (incl. reactivated) in correction history.
+  const coreNodeTargetIds = correction.targets
+    .filter((target) => target.target_type === "core_node")
+    .map((target) => target.target_id);
+  const { data: coreNodeRows } = coreNodeTargetIds.length
+    ? await supabase.from("core_nodes").select("id, title, status").in("id", coreNodeTargetIds)
+    : { data: [] };
+  const coreNodeById = new Map(
+    ((coreNodeRows ?? []) as { id: string; title: string; status: string }[]).map((row) => [
+      row.id,
+      row,
+    ])
+  );
+
   return (
     <main className="shell">
       <h1>{correction.title}</h1>
@@ -154,12 +168,23 @@ export default async function CorrectionDetailPage({
           <p>Нет targets.</p>
         ) : (
           <ul>
-            {correction.targets.map((target) => (
-              <li key={target.id}>
-                {target.role}: {target.target_type} {target.target_id}
-                {target.expected_effect ? <> — {target.expected_effect}</> : null}
-              </li>
-            ))}
+            {correction.targets.map((target) => {
+              const coreNode =
+                target.target_type === "core_node" ? coreNodeById.get(target.target_id) : undefined;
+              return (
+                <li key={target.id}>
+                  {target.role}: {target.target_type}{" "}
+                  {coreNode ? (
+                    <Link href={`/core-nodes/${coreNode.id}`}>
+                      {coreNode.title} (статус: {coreNode.status})
+                    </Link>
+                  ) : (
+                    target.target_id
+                  )}
+                  {target.expected_effect ? <> — {target.expected_effect}</> : null}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

@@ -682,6 +682,82 @@ export type Database = {
           },
         ]
       }
+      core_node_reactivations: {
+        Row: {
+          calculation: Json
+          client_id: string
+          core_node_id: string
+          created_at: string
+          created_by: string | null
+          decided_at: string | null
+          decided_by: string | null
+          id: string
+          organization_id: string
+          previous_activation_score: number | null
+          proposed_activation_score: number
+          reason: string
+          scoring_model_version: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          calculation: Json
+          client_id: string
+          core_node_id: string
+          created_at?: string
+          created_by?: string | null
+          decided_at?: string | null
+          decided_by?: string | null
+          id?: string
+          organization_id: string
+          previous_activation_score?: number | null
+          proposed_activation_score: number
+          reason: string
+          scoring_model_version: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          calculation?: Json
+          client_id?: string
+          core_node_id?: string
+          created_at?: string
+          created_by?: string | null
+          decided_at?: string | null
+          decided_by?: string | null
+          id?: string
+          organization_id?: string
+          previous_activation_score?: number | null
+          proposed_activation_score?: number
+          reason?: string
+          scoring_model_version?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "core_node_reactivations_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "core_node_reactivations_core_node_id_fkey"
+            columns: ["core_node_id"]
+            isOneToOne: false
+            referencedRelation: "core_nodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "core_node_reactivations_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       core_node_relations: {
         Row: {
           client_id: string
