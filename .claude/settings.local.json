@@ -31,7 +31,9 @@
       "Bash(PATH=/Users/dmitryeliseev/.local/bin:/opt/homebrew/bin:__TRACKED_VAR__ pnpm exec vitest run tests/integration/ai-cluster.integration.test.ts)",
       "Bash(git config *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(git -C \"/Users/dmitryeliseev/Downloads/myProjects/Живая карта\" status --short)",
+      "Bash(git check-ignore *)"
     ]
   }
 }
