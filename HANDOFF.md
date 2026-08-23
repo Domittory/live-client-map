@@ -1,16 +1,11 @@
 # Handoff — «Живая карта клиента»
 
-Дата: 2026-08-23. Обновлено автономным агентом (Claude) после закрытия тикетов 49 (другим агентом), 56, 58, 63 и 64.
+Дата: 2026-08-23. Обновлено автономным агентом (Claude) после закрытия тикетов 49 (другим агентом), 56, 58, 63, 64 и 65.
 
 ## Статус тикетов
 
-- **Resolved: 01–64** (все до 64 включительно).
-  - Последние закрытые: 60 (`RLS privilege audit`), 61 (`runtime security/rate limits`), 62 (`monitoring/logging`), 63 (`backup/staging/production`), 64 (`universal acceptance tests`).
-- **Ready-for-agent: 65** — финальный тикет:
-  ```
-  65 (production readiness journey)
-  ```
-  Зависимости 65 разблокированы (1–64 resolved).
+- **Resolved: 01–65** — все тикеты закрыты.
+  - Последние закрытые: 60 (`RLS privilege audit`), 61 (`runtime security/rate limits`), 62 (`monitoring/logging`), 63 (`backup/staging/production`), 64 (`universal acceptance tests`), 65 (`production readiness journey`).
 
 ## Окружение (важно после перезагрузки)
 
@@ -77,5 +72,13 @@ supabase db reset      # пересборка локальной БД из ми�
 
 ## Куда дальше
 
-- **65** (production readiness journey) — разблокирован и не занят, следующий в автономном порядке.
-- Отдельным тикетом после 63: **export-файлы/retention** (`export_requests` + 30-дневный retention).
+- Основная цепочка 01–65 закрыта — автономной реализации больше нет. Осталось только человеческое
+  подписание production-готовности и разовые облачные шаги.
+- **Владельцу (разово, требует облака и подписи):**
+  1. Создать проекты Vercel + Supabase Cloud (`staging`, `production`) и завести секреты —
+     `docs/ops/deployment.md`.
+  2. Прогнать и подписать staging smoke, restore drill и release checklist —
+     `docs/ops/release-checklist.md`.
+  3. Закрыть открытые хвосты ниже.
+- **Открытые хвосты:** export-файлы/retention (`export_requests` + 30 дней), reset-password
+  callback (тикет 11), CVE `next@15.1.6`.
