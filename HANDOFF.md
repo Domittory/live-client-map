@@ -1,16 +1,16 @@
 # Handoff — «Живая карта клиента»
 
-Дата: 2026-08-23. Обновлено автономным агентом (Claude) после закрытия тикетов 49 (другим агентом), 56, 58 и 63.
+Дата: 2026-08-23. Обновлено автономным агентом (Claude) после закрытия тикетов 49 (другим агентом), 56, 58, 63 и 64.
 
 ## Статус тикетов
 
-- **Resolved: 01–63** (все до 63 включительно).
-  - Последние закрытые: 60 (`RLS privilege audit`), 61 (`runtime security/rate limits`), 62 (`monitoring/logging`), 63 (`backup/staging/production`).
-- **Ready-for-agent: 64–65** — финальная цепочка:
+- **Resolved: 01–64** (все до 64 включительно).
+  - Последние закрытые: 60 (`RLS privilege audit`), 61 (`runtime security/rate limits`), 62 (`monitoring/logging`), 63 (`backup/staging/production`), 64 (`universal acceptance tests`).
+- **Ready-for-agent: 65** — финальный тикет:
   ```
-  64 (universal acceptance tests) ─► 65 (production readiness journey)
+  65 (production readiness journey)
   ```
-  Все зависимости 64–65 разблокированы (1–63 resolved).
+  Зависимости 65 разблокированы (1–64 resolved).
 
 ## Окружение (важно после перезагрузки)
 
@@ -77,6 +77,5 @@ supabase db reset      # пересборка локальной БД из ми�
 
 ## Куда дальше
 
-- **64** (universal acceptance tests) → **65** (production readiness journey).
-- 64 разблокирован и не занят — следующий в автономном порядке.
+- **65** (production readiness journey) — разблокирован и не занят, следующий в автономном порядке.
 - Отдельным тикетом после 63: **export-файлы/retention** (`export_requests` + 30-дневный retention).
