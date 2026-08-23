@@ -5,6 +5,7 @@ import type { AiProvider } from "@/lib/ai/provider";
 import { withAudit } from "./audit";
 import { requireConsent } from "./consent";
 import { ServiceError } from "./errors";
+import { recordModelChange } from "./model-changes";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
 import { uuid, validate } from "./validation";
 
@@ -799,7 +800,7 @@ export async function reviewFollowUpAssessment(
     updated_at: now,
   };
 
-  return withAudit(
+  const updated = await withAudit(
     client,
     {
       organizationId: followUp.organization_id,
@@ -822,6 +823,21 @@ export async function reviewFollowUpAssessment(
       return mapRow(data);
     }
   );
+
+  // ModelChange (ticket 43, SPEC §8.31): the approved final verdict is a
+  // significant model transition (completed → effective/…/unclear).
+  await recordModelChange(client, {
+    organizationId: followUp.organization_id,
+    clientId: followUp.client_id,
+    entityType: "follow_up",
+    entityId: followUp.id,
+    previousState: { result_status: followUp.result_status },
+    newState: { result_status: finalStatus },
+    changeReason: `Follow-up assessment approved: ${finalStatus}. ${assessment.rationale}`,
+    evidenceRefs: assessment.evidence_refs,
+  });
+
+  return updated;
 }
 
 export {

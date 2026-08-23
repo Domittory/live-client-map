@@ -1780,6 +1780,63 @@ export type Database = {
           },
         ]
       }
+      model_changes: {
+        Row: {
+          change_reason: string
+          client_id: string
+          created_at: string
+          entity_id: string
+          entity_type: string
+          evidence_refs: string[]
+          id: string
+          new_state: Json | null
+          occurred_at: string
+          organization_id: string
+          previous_state: Json | null
+        }
+        Insert: {
+          change_reason: string
+          client_id: string
+          created_at?: string
+          entity_id: string
+          entity_type: string
+          evidence_refs?: string[]
+          id?: string
+          new_state?: Json | null
+          occurred_at?: string
+          organization_id: string
+          previous_state?: Json | null
+        }
+        Update: {
+          change_reason?: string
+          client_id?: string
+          created_at?: string
+          entity_id?: string
+          entity_type?: string
+          evidence_refs?: string[]
+          id?: string
+          new_state?: Json | null
+          occurred_at?: string
+          organization_id?: string
+          previous_state?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "model_changes_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "model_changes_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       observations: {
         Row: {
           client_id: string
@@ -2045,6 +2102,114 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      psychological_snapshots: {
+        Row: {
+          active_core_nodes: Json
+          active_themes: Json
+          ai_model: string
+          changes_since_previous: Json | null
+          client_id: string
+          created_at: string
+          current_requests: Json
+          development_targets: Json
+          evidence_digest: string
+          generated_at: string
+          generated_by: string | null
+          id: string
+          model_hash: string
+          ontology_version: string
+          organization_id: string
+          prompt_version: string
+          reactivated_nodes: Json
+          reason: string
+          recent_corrections: Json
+          recent_triggers: Json
+          recommendations: Json
+          resource_state: Json
+          risk_notes: string
+          scoring_model_version: string
+          summary: string
+          trend_summary: string
+          version: number
+          weakened_nodes: Json
+        }
+        Insert: {
+          active_core_nodes?: Json
+          active_themes?: Json
+          ai_model: string
+          changes_since_previous?: Json | null
+          client_id: string
+          created_at?: string
+          current_requests?: Json
+          development_targets?: Json
+          evidence_digest?: string
+          generated_at?: string
+          generated_by?: string | null
+          id?: string
+          model_hash: string
+          ontology_version: string
+          organization_id: string
+          prompt_version: string
+          reactivated_nodes?: Json
+          reason: string
+          recent_corrections?: Json
+          recent_triggers?: Json
+          recommendations?: Json
+          resource_state?: Json
+          risk_notes?: string
+          scoring_model_version: string
+          summary?: string
+          trend_summary?: string
+          version: number
+          weakened_nodes?: Json
+        }
+        Update: {
+          active_core_nodes?: Json
+          active_themes?: Json
+          ai_model?: string
+          changes_since_previous?: Json | null
+          client_id?: string
+          created_at?: string
+          current_requests?: Json
+          development_targets?: Json
+          evidence_digest?: string
+          generated_at?: string
+          generated_by?: string | null
+          id?: string
+          model_hash?: string
+          ontology_version?: string
+          organization_id?: string
+          prompt_version?: string
+          reactivated_nodes?: Json
+          reason?: string
+          recent_corrections?: Json
+          recent_triggers?: Json
+          recommendations?: Json
+          resource_state?: Json
+          risk_notes?: string
+          scoring_model_version?: string
+          summary?: string
+          trend_summary?: string
+          version?: number
+          weakened_nodes?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "psychological_snapshots_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "psychological_snapshots_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       purpose_profiles: {
         Row: {

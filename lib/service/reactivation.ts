@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { withAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { recordModelChange } from "./model-changes";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
 import { clampScore, REACTIVATION_CONFIG, type ReactivationConfig } from "./scoring";
 import { contributesIndependentEvidence, type EvidenceLevel } from "./signal-interpretation";
@@ -586,6 +587,23 @@ export async function reviewCoreNodeReactivation(
       if (error) throw mapWriteError(error, "Failed to reactivate core node");
     }
   );
+
+  // ModelChange (ticket 43, SPEC §8.31): the approved reactivation is a
+  // significant model transition (weakened → reactivated).
+  await recordModelChange(client, {
+    organizationId: proposal.organization_id,
+    clientId: proposal.client_id,
+    entityType: "core_node",
+    entityId: node.id,
+    previousState: { status: node.status, activation_score: node.activation_score },
+    newState: { status: "reactivated", activation_score: proposal.proposed_activation_score },
+    changeReason: proposal.reason,
+    evidenceRefs: [
+      proposal.id,
+      ...proposal.calculation.triggerActivations.map((activation) => activation.id),
+      ...proposal.calculation.signals.map((signal) => signal.id),
+    ],
+  });
 
   return withAudit(
     client,
