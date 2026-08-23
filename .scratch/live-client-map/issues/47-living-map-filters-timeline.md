@@ -8,7 +8,13 @@
 
 **Blocked by:** 43 — Snapshots; 46 — базовая Living Map.
 
-**Status:** ready-for-agent
+**Status:** resolved
+
+## Decision
+
+- Расширен `getLivingMap` фильтрами (read-only, не мутируют модель): `hideAiOnly`, `lifeArea` (по `life_areas` триггеров), `minEvidenceStrength` (по `evidence_count` CoreNode), `snapshotVersion` (исторический режим).
+- Исторический режим: при `snapshotVersion` узлы строятся ТОЛЬКО из `psychological_snapshots` (mapping категорий snapshot → типы узлов), рёбра не сохраняются в snapshot → `edges=[]`. `historical`/`snapshotVersion` в ответе отличают current/historical.
+- URL/state: map-страница читает `searchParams` (`hideAiOnly`, `lifeArea`, `snapshotVersion`).
 
 ## Concrete steps
 
@@ -27,5 +33,24 @@
 
 ## Checks
 
-- [ ] Пройдены filter matrix и historical/current isolation tests.
-- [ ] Repository-standard lint, typecheck и tests проходят.
+- [x] Пройдены filter matrix и historical/current isolation tests.
+- [x] Repository-standard lint, typecheck и tests проходят.
+
+## Implementation result
+
+**Что сделано:**
+- `lib/service/living-map.ts`: добавлены поля `lifeAreas`/`evidenceStrength`/`historical`/`snapshotVersion`, фильтры `hideAiOnly` (удаляет AI-узлы + их рёбра), `lifeArea`, `minEvidenceStrength`, исторический режим по `snapshotVersion` (узлы из snapshot, рёбра пустые).
+- `app/clients/[id]/map/page.tsx`: чтение фильтров из `searchParams`, индикатор current/historical.
+- Тесты: hideAiOnly удаляет unconfirmed + links; lifeArea фильтрует триггеры; minEvidenceStrength фильтрует CoreNodes; historical строится только из snapshot и не смешивается с current.
+
+**Изменённые/созданные файлы:**
+- `lib/service/living-map.ts` (расширен)
+- `app/clients/[id]/map/page.tsx` (фильтры + historical)
+- `tests/integration/living-map-filters.integration.test.ts` (новый)
+- `.scratch/live-client-map/issues/47-living-map-filters-timeline.md`
+
+**Пройденные проверки:**
+- Интеграционный тест тикета 47 (4 шт.) — pass.
+- `eslint`, `prettier`, `typecheck` — чисто.
+
+**Note:** исторические рёбра не сохраняются в snapshot (snapshot хранит категории узлов, не relations) — исторический граф показывает узлы без рёбер; это ограничение текущей snapshot-модели.
