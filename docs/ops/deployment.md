@@ -24,17 +24,23 @@ CI/CD — GitHub Actions. Здесь — операционная процеду
 - `deploy-staging.yml` — на pull request в `main` делает `supabase db push --dry-run` (только
   показывает SQL, ничего не меняет); на push в `staging` применяет миграции и запускает
   post-deploy smoke.
-- `deploy-production.yml` — на push в `main` применяет миграции в production и запускает
-  post-deploy smoke. Job привязан к environment `production`, поэтому запускается только после
-  ручного одобрения (required reviewer).
+- `deploy-production.yml` — запускается вручную из GitHub Actions, применяет миграции в
+  production и запускает post-deploy smoke. Job привязан к environment `production`, поэтому
+  после запуска дополнительно ждёт ручного одобрения (required reviewer).
+
+Пока реальные production-проекты и secrets не созданы, автоматический запуск этого workflow на
+push в `main` отключён (тикет 67). Это не удаляет pipeline: после provisioning его можно запустить
+кнопкой **Run workflow**. Нативная интеграция Vercel настраивается отдельно.
 
 ### Порядок действий при релизе
 
 1. Изменения кода и миграции приходят в `main` через pull request (CI quality gates зелёные,
    dry-run миграций показан в логе).
-2. После merge в `main` запускается `deploy-production.yml` и ждёт одобрения.
-3. Одобряющий проверяет лог dry-run, затем одобряет — применяются миграции, прогоняется smoke.
-4. Vercel автоматически публикует `main` в production.
+2. После provisioning владелец открывает GitHub Actions → `Deploy to production` → **Run
+   workflow**.
+3. Workflow ждёт required reviewer; одобряющий запускает job, проверяет dry-run, после чего
+   применяются миграции и прогоняется smoke.
+4. Публикация приложения через Vercel выполняется его отдельно настроенной Git-интеграцией.
 
 ## Миграции
 
@@ -74,8 +80,8 @@ Actions (или в настройках environment), а на Vercel — в Envi
 | `SUPABASE_SERVICE_ROLE_KEY`            | Vercel (production only)         | service_role key (только сервер, не в браузер) |
 | `AI_PROVIDER`, `AI_PRODUCTION_ENABLED` | Vercel (production only)         | AI-шлюз (тикет 32)                             |
 
-Environment `production` в GitHub дополнительно настраивается с required reviewers — это и есть
-ручное одобрение перед деплоем в production.
+Environment `production` в GitHub дополнительно настраивается с required reviewers. Это второй
+ручной барьер после кнопки **Run workflow** перед изменением production.
 
 ## Откат
 

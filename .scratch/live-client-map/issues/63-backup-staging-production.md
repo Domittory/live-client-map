@@ -41,8 +41,9 @@
 
 **Что сделано:**
 - Deploy-пайплайны GitHub Actions: `deploy-staging.yml` (dry-run на PR, apply + smoke на push в
-  `staging`) и `deploy-production.yml` (apply + smoke на push в `main`, environment `production` с
-  ручным одобрением через required reviewers).
+  `staging`) и `deploy-production.yml` (apply + smoke, environment `production` с ручным
+  одобрением через required reviewers). До provisioning production его автоматический запуск на
+  push в `main` заменён ручным `workflow_dispatch` в тикете 67.
 - Post-deploy smoke-скрипт `scripts/post-deploy-smoke.sh` (проверяет `/api/health` и `/`).
 - Операционная документация `docs/ops/`: `README.md`, `deployment.md` (среда, деплой, миграции,
   матрица секретов, откат, гарантия от частично применённого release), `backup-restore.md`
