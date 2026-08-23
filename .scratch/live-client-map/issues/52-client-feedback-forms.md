@@ -8,7 +8,12 @@
 
 **Blocked by:** 04 — feedback contract; 13 — consent; 41 — FollowUp; 51 — Client Portal.
 
-**Status:** ready-for-agent
+**Status:** resolved
+
+## Decision
+
+- Миграция `0034`: таблица `client_feedback_forms` (questions jsonb, answers jsonb, status draft/sent/completed/expired, correction_id/follow_up_id, sent_at/completed_at/expires_at). RLS: specialist с write-доступом управляет; portal-сессия читает только свои sent/completed формы (по email из `client_portal_users`).
+- `submitFeedbackForm` создаёт `Signals` с `source_type=follow_up`, `epistemic_type=self_report`, `review_status=pending` — НЕ подтверждает гипотезу без review. Re-submit/expired/required-answer отклоняются.
 
 ## Concrete steps
 
@@ -27,5 +32,24 @@
 
 ## Checks
 
-- [ ] Пройдены ownership, idempotency и review-boundary tests.
-- [ ] Repository-standard lint, typecheck и tests проходят.
+- [x] Пройдены ownership, idempotency и review-boundary tests.
+- [x] Repository-standard lint, typecheck и tests проходят.
+
+## Implementation result
+
+**Что сделано:**
+- Миграция `0034_client_feedback_forms.sql`: таблица + RLS (specialist управляет; portal только свои sent/completed).
+- Сервис `lib/service/feedback-forms.ts`: `createFeedbackForm` (draft), `sendFeedbackForm` (sent + expires 14д), `submitFeedbackForm` (валидация required-ответов, completed + pending Signal), `listFeedbackForms`.
+- Тесты: submission → pending signal (source follow_up/self_report); resubmit отклоняется; required-answer отклоняется.
+
+**Изменённые/созданные файлы:**
+- `supabase/migrations/0034_client_feedback_forms.sql` (новый)
+- `lib/service/feedback-forms.ts` (новый)
+- `tests/integration/feedback-forms.integration.test.ts` (новый)
+- `.scratch/live-client-map/issues/52-client-feedback-forms.md`
+
+**Пройденные проверки:**
+- Интеграционный тест тикета 52 (3 шт.) — pass.
+- `eslint`, `prettier`, `typecheck` — чисто.
+
+**Note:** portal UI заполнения и specialist review UI отложены (сервисный слой + RLS готовы). Связь feedback → FollowUp evaluation реализуется в использовании `follow_up_id` при создании формы.
