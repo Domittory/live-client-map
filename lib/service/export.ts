@@ -4,6 +4,7 @@ import { z } from "zod";
 import { recordAudit } from "./audit";
 import { requireConsent } from "./consent";
 import { ServiceError } from "./errors";
+import { incrementCounter } from "@/lib/telemetry";
 import { uuid, validate } from "./validation";
 
 /**
@@ -146,6 +147,7 @@ export async function exportSignalsCsv(client: SupabaseClient, rawQuery: unknown
     action: "export.signals_csv",
     after: { signals: rows.length - 1 },
   });
+  incrementCounter("export_total", "Total exports by type", { type: "signals_csv" });
   return csv;
 }
 
@@ -247,5 +249,6 @@ export async function exportClientArchive(
     action: "export.client_archive",
     after: archive.manifest.record_counts,
   });
+  incrementCounter("export_total", "Total exports by type", { type: "client_archive" });
   return archive;
 }

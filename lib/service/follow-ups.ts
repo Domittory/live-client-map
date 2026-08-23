@@ -7,6 +7,7 @@ import { requireConsent } from "./consent";
 import { ServiceError } from "./errors";
 import { recordModelChange } from "./model-changes";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
+import { incrementCounter } from "@/lib/telemetry";
 import { uuid, validate } from "./validation";
 
 /**
@@ -349,6 +350,9 @@ export async function scheduleFollowUp(
         .select()
         .single();
       if (error) throw mapWriteError(error, "Failed to schedule follow-up");
+      incrementCounter("follow_up_total", "Total follow-up lifecycle transitions", {
+        transition: "scheduled",
+      });
       return mapRow(data);
     }
   );
@@ -444,6 +448,9 @@ export async function completeFollowUp(
         .single();
       if (error) throw mapWriteError(error, "Failed to complete follow-up");
       if (!data) throw new ServiceError("NOT_FOUND", "Follow-up not found");
+      incrementCounter("follow_up_total", "Total follow-up lifecycle transitions", {
+        transition: "completed",
+      });
       return mapRow(data);
     }
   );
@@ -488,6 +495,9 @@ export async function cancelFollowUp(
         .single();
       if (error) throw mapWriteError(error, "Failed to cancel follow-up");
       if (!data) throw new ServiceError("NOT_FOUND", "Follow-up not found");
+      incrementCounter("follow_up_total", "Total follow-up lifecycle transitions", {
+        transition: "cancelled",
+      });
       return mapRow(data);
     }
   );

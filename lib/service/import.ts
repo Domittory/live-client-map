@@ -11,6 +11,7 @@ import {
 import { ingestSignals } from "./ai-ingest";
 import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { incrementCounter } from "@/lib/telemetry";
 import { uuid, validate } from "./validation";
 
 /**
@@ -123,6 +124,9 @@ export async function importText(
     throw new ServiceError("VALIDATION_ERROR", "empty_content");
   }
   if (codePoints(input.content) > MAX_SOURCE_CODEPOINTS) {
+    incrementCounter("import_total", "Total imports by outcome", {
+      outcome: "size_limit_exceeded",
+    });
     throw new ServiceError("VALIDATION_ERROR", "size_limit_exceeded");
   }
 
@@ -202,6 +206,9 @@ export async function importSignalsCsv(
   );
 
   if (codePoints(input.content) > MAX_SOURCE_CODEPOINTS) {
+    incrementCounter("import_total", "Total imports by outcome", {
+      outcome: "size_limit_exceeded",
+    });
     throw new ServiceError("VALIDATION_ERROR", "size_limit_exceeded");
   }
   const contentSha = sha256(input.content);
@@ -253,6 +260,9 @@ export async function importSignalsJson(
   );
 
   if (codePoints(input.content) > MAX_SOURCE_CODEPOINTS) {
+    incrementCounter("import_total", "Total imports by outcome", {
+      outcome: "size_limit_exceeded",
+    });
     throw new ServiceError("VALIDATION_ERROR", "size_limit_exceeded");
   }
   const contentSha = sha256(input.content);
@@ -434,6 +444,7 @@ async function finalizeImport(
     action: "import.parsed",
     after: { input_format: inputFormat },
   });
+  incrementCounter("import_total", "Total imports by outcome", { outcome: "parsed" });
   return {
     contract: "live-client-map.import-report",
     version: "1.0",
@@ -868,6 +879,7 @@ async function commitStructured(
     action: "import.parsed",
     after: { input_format: input.inputFormat, committed },
   });
+  incrementCounter("import_total", "Total imports by outcome", { outcome: "parsed" });
 
   return {
     contract: "live-client-map.import-report",

@@ -3,6 +3,7 @@ import { FakeAiProvider, OpenAiResponsesProvider, type AiProvider } from "@/lib/
 import { getServerEnv } from "@/lib/env";
 import { ServiceError, toErrorResponse } from "@/lib/service/errors";
 import { createClient } from "@/lib/supabase/server";
+import { withTelemetry } from "@/lib/telemetry";
 
 /**
  * The only server-side AI entry point (ticket 32). The provider secret is read
@@ -16,7 +17,7 @@ function resolveProvider(): AiProvider {
   return new FakeAiProvider();
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function handlePost(request: Request): Promise<Response> {
   try {
     const supabase = await createClient();
     const body: unknown = await request.json().catch(() => {
@@ -28,3 +29,5 @@ export async function POST(request: Request): Promise<Response> {
     return toErrorResponse(err);
   }
 }
+
+export const POST = withTelemetry(handlePost);

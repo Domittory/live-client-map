@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { ServiceError } from "@/lib/service/errors";
+import { incrementCounter, observeHistogram } from "@/lib/telemetry";
 import { uuid, validate } from "@/lib/service/validation";
 import {
   AI_CONTRACTS,
@@ -168,6 +169,9 @@ async function persistRun(
     .select("id")
     .single();
   if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to persist AI run");
+  incrementCounter("ai_run_total", "Total AI gateway runs by outcome status", {
+    status: outcome.status,
+  });
   return (data as { id: string }).id;
 }
 
@@ -461,6 +465,12 @@ export async function runAiFunction(
     });
     return { ok: false, status, runId, retryable: true, error: "AI provider call failed" };
   } finally {
+    observeHistogram(
+      "ai_call_duration_ms",
+      "AI provider call duration including retries",
+      [1000, 5000, 15000, 30000, 120000],
+      Date.now() - startedAt
+    );
     limiter.release(input.organizationId);
   }
 }
