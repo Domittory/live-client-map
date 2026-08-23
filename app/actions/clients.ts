@@ -33,18 +33,19 @@ export async function createClientAction(
   if (!orgId) return { error: "Организация не найдена." };
 
   const supabase = await createClient();
+  let id: string;
   try {
-    const id = await createClientService(supabase, {
+    id = await createClientService(supabase, {
       organizationId: orgId,
       displayName: String(formData.get("displayName") ?? ""),
       firstName: String(formData.get("firstName") ?? "") || null,
       lastName: String(formData.get("lastName") ?? "") || null,
     });
-    revalidatePath("/clients");
-    redirect(`/clients/${id}`);
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Не удалось создать клиента." };
   }
+  revalidatePath("/clients");
+  redirect(`/clients/${id}`);
 }
 
 export async function updateClientAction(
