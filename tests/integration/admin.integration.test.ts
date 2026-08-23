@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
+import { listMembers } from "@/lib/service/admin";
 
 // Integration tests run against a local Supabase (ticket 01: Supabase CLI + Docker).
 // They skip when the environment is not configured, so `pnpm test` stays green
@@ -99,6 +100,40 @@ async function inviteAndAccept(
 }
 
 describe.skipIf(!available)("organization admin (requires local Supabase)", () => {
+  it("lists organization members with their profile emails", async () => {
+    const admin = adminClient();
+    const owner = await createUser(admin, "list-owner");
+    const member = await createUser(admin, "list-member");
+    const orgId = await createOrg(admin, owner, "list");
+    const { error: memberError } = await admin.from("organization_members").insert({
+      organization_id: orgId,
+      user_id: member.userId,
+      role: "specialist",
+      status: "active",
+    });
+    expect(memberError).toBeNull();
+    const ownerClient = await signIn(owner.email, owner.password);
+
+    const { members } = await listMembers(ownerClient, orgId);
+
+    expect(members).toEqual([
+      {
+        userId: owner.userId,
+        email: owner.email,
+        role: "owner",
+        status: "active",
+        isOwner: true,
+      },
+      {
+        userId: member.userId,
+        email: member.email,
+        role: "specialist",
+        status: "active",
+        isOwner: false,
+      },
+    ]);
+  });
+
   it("runs the invite → accept flow and writes audit records", async () => {
     const admin = adminClient();
     const owner = await createUser(admin, "inv-owner");

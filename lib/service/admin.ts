@@ -206,10 +206,18 @@ export async function listMembers(
 
   const { data: members, error: membersError } = await client
     .from("organization_members")
-    .select("user_id, role, status, profiles(email)")
+    .select("user_id, role, status")
     .eq("organization_id", organizationId)
     .order("joined_at", { ascending: true });
   if (membersError) throw new ServiceError("INTERNAL_ERROR", "Failed to list members");
+
+  const memberIds = (members ?? []).map((member) => member.user_id);
+  const { data: profiles, error: profilesError } = memberIds.length
+    ? await client.from("profiles").select("id, email").in("id", memberIds)
+    : { data: [], error: null };
+  if (profilesError) throw new ServiceError("INTERNAL_ERROR", "Failed to list member profiles");
+
+  const emailByUserId = new Map((profiles ?? []).map((profile) => [profile.id, profile.email]));
 
   const { data: invitations, error: invitationsError } = await client
     .from("organization_invitations")
@@ -222,7 +230,7 @@ export async function listMembers(
   return {
     members: (members ?? []).map((member) => ({
       userId: member.user_id,
-      email: (member.profiles as unknown as { email: string } | null)?.email ?? member.user_id,
+      email: emailByUserId.get(member.user_id) ?? member.user_id,
       role: member.role,
       status: member.status,
       isOwner: member.user_id === org.owner_user_id,
