@@ -107,6 +107,17 @@ describe("redaction", () => {
     expect(looksUnredacted("plain text")).toBe(false);
     expect(looksUnredacted("mail me at a@b.co")).toBe(true);
   });
+
+  it("never mangles UUIDs, even with phone-like digit runs inside", () => {
+    const uuid = "11ce376a-64fc-4421-b2fb-534242918276";
+    const { text, mapping } = redactText({
+      text: `change ${uuid} reason +7 (999) 123-45-67`,
+    });
+    expect(text).toContain(uuid);
+    expect(text).not.toContain("123-45-67");
+    expect(Object.values(mapping)).not.toContain(uuid);
+    expect(looksUnredacted(text)).toBe(false);
+  });
 });
 
 describe("rate limiter", () => {
