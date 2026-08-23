@@ -19,9 +19,10 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
         </>
       ) : (
         <p>
-          Сначала <Link href="/login">войдите</Link> или{" "}
-          <Link href="/signup">зарегистрируйтесь</Link> на email приглашения, затем вернитесь по
-          этой ссылке.
+          Сначала{" "}
+          <Link href={`/login?redirectTo=/invite/${encodeURIComponent(token)}`}>войдите</Link> или{" "}
+          <Link href={`/signup?invite=${encodeURIComponent(token)}`}>зарегистрируйтесь</Link> на
+          email приглашения.
         </p>
       )}
     </main>
