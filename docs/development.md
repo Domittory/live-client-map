@@ -9,7 +9,7 @@
 | Node.js      | 20 LTS                   | `node --version`     |
 | pnpm         | 9 (см. `packageManager`) | `pnpm --version`     |
 | Docker       | актуальная               | `docker --version`   |
-| Supabase CLI | актуальная               | `supabase --version` |
+| Supabase CLI | 2.115.0                  | `supabase --version` |
 
 pnpm включается через Corepack: `corepack enable` (версия берётся из поля `packageManager` в
 `package.json`). Docker и Supabase CLI требуются для локального Supabase — они вводятся в тикете 10,
