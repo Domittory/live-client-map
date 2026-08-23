@@ -59,7 +59,13 @@ function csvCell(value: unknown): string {
   return s;
 }
 
-async function requireExportAccess(
+/**
+ * Shared export authorization: tenant + assignment (`is_client_accessible`) +
+ * active `data_storage` consent, returning the caller's assignment role for
+ * visibility filtering. Reused by the snapshot report (ticket 56) so that both
+ * export paths enforce one identical rule instead of drifting apart.
+ */
+export async function requireExportAccess(
   client: SupabaseClient,
   clientId: string,
   requireWrite: boolean

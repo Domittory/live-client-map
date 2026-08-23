@@ -318,6 +318,64 @@ function SnapshotDetail({ snapshot }: { snapshot: PsychologicalSnapshot }) {
   );
 }
 
+/**
+ * Report export (ticket 56, §13). The contract requires every request to name
+ * an exact snapshot version — turning "latest" into a concrete version is the
+ * UI's job, so the newest version is preselected here rather than resolved
+ * later on the server.
+ */
+function ReportExportSection({
+  clientId,
+  snapshots,
+}: {
+  clientId: string;
+  snapshots: PsychologicalSnapshot[];
+}) {
+  return (
+    <section>
+      <h2>Отчёт: Markdown и PDF</h2>
+      {snapshots.length === 0 ? (
+        <p>Отчёт можно сформировать после создания первого snapshot.</p>
+      ) : (
+        <form method="get" action="/api/reports/snapshot">
+          <input type="hidden" name="clientId" value={clientId} />
+          <label>
+            Версия snapshot
+            <select name="snapshotVersion" defaultValue={String(snapshots[0].version)}>
+              {snapshots.map((snapshot, index) => (
+                <option key={snapshot.id} value={snapshot.version}>
+                  v{snapshot.version}
+                  {index === 0 ? " (последняя)" : ""} — {snapshot.generated_at}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Аудитория
+            <select name="audience" defaultValue="specialist">
+              <option value="specialist">Специалист</option>
+              <option value="client">Клиент</option>
+            </select>
+          </label>
+          <label>
+            Формат
+            <select name="format" defaultValue="markdown">
+              <option value="markdown">Markdown</option>
+              <option value="pdf">PDF</option>
+            </select>
+          </label>
+          <button type="submit">Скачать отчёт</button>
+        </form>
+      )}
+      <p>
+        Отчёт собирается из выбранной неизменяемой версии snapshot и не создаёт новых выводов. Отчёт
+        для клиента содержит только материалы, помеченные как доступные клиенту, и объяснения,
+        прошедшие проверку.
+      </p>
+    </section>
+  );
+}
+
 export default async function SnapshotsPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
   const supabase = await createClient();
@@ -426,6 +484,8 @@ export default async function SnapshotsPage({ searchParams }: { searchParams: Se
               <p>Изменений модели пока нет.</p>
             )}
           </section>
+
+          <ReportExportSection clientId={clientId} snapshots={snapshots?.items ?? []} />
 
           <WhatChangedSection
             snapshot={snapshots && snapshots.items.length > 0 ? snapshots.items[0] : null}
