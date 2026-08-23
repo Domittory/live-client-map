@@ -35,7 +35,7 @@
 Решение одобрено владельцем проекта 2026-08-22.
 
 **Стек приложения:**
-- Frontend и backend: Next.js (App Router) + TypeScript, единое приложение (UI + API routes/server actions), Node.js 20 LTS.
+- Frontend и backend: Next.js (App Router) + TypeScript, единое приложение (UI + API routes/server actions), Node.js 24 LTS.
 - База данных, auth, RLS: Supabase (Postgres). Никаких дополнительных backend-сервисов.
 - Package manager: pnpm. Один репозиторий, монорепозиторий не используется.
 
@@ -58,3 +58,7 @@
 - `test:e2e` (Playwright)
 
 Тикеты 09, 10, 32 и 63 должны опираться на это решение без выбора альтернативных технологий.
+
+## Runtime update — 2026-08-23
+
+Владелец одобрил переход с Node.js 20 на Node.js 24 LTS. Решение выше обновлено и заменяет первоначальный runtime choice, потому что Node.js 20 достиг EOL, а текущий `@supabase/supabase-js` требует native WebSocket из Node.js 22+.

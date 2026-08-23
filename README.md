@@ -11,11 +11,11 @@
 - **Frontend + backend**: Next.js (App Router) + TypeScript, единое приложение (UI + API routes).
 - **БД / auth / RLS**: Supabase (Postgres).
 - **Package manager**: pnpm.
-- **Runtime**: Node.js 20 LTS.
+- **Runtime**: Node.js 24 LTS.
 
 ## Быстрый старт
 
-Требования: Node.js 20 LTS, pnpm 9, Docker (для локального Supabase — см. тикет 10).
+Требования: Node.js 24 LTS, pnpm 9, Docker (для локального Supabase — см. тикет 10).
 
 ```bash
 pnpm install        # установка зависимостей

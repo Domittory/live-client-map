@@ -6,7 +6,7 @@
 
 | Компонент    | Версия                   | Проверка             |
 | ------------ | ------------------------ | -------------------- |
-| Node.js      | 20 LTS                   | `node --version`     |
+| Node.js      | 24 LTS                   | `node --version`     |
 | pnpm         | 9 (см. `packageManager`) | `pnpm --version`     |
 | Docker       | актуальная               | `docker --version`   |
 | Supabase CLI | 2.115.0                  | `supabase --version` |
