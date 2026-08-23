@@ -34,6 +34,9 @@ export default async function Home() {
       <p>Вы вошли как {user.email}</p>
       {orgName ? <p>Организация: {orgName}</p> : <p>Организация ещё не создана.</p>}
       <p>
+        <Link href="/clients">Клиенты</Link>
+      </p>
+      <p>
         <Link href="/library">Диагностическая библиотека</Link>
       </p>
       <p>
