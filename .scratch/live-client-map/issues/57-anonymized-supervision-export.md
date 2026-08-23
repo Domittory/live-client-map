@@ -8,7 +8,12 @@
 
 **Blocked by:** 05 — privacy policy; 08 — export contract; 50 — Relationships; 55 — archive/export foundation.
 
-**Status:** ready-for-agent
+**Status:** resolved
+
+## Decision
+
+- Сервис `lib/service/supervision-export.ts` → `exportSupervision`: allowlist-only (evidence counts по уровням, reviewed themes/core_hypotheses/resources/targets, статусы коррекций), без прямых идентификаторов/raw statements/точных дат/relationship data. `case_key` — случайный на каждый export.
+- Авторизация: supervisor assignment (`client_assignments.access_role='supervisor'`) + consent `supervisor_access` + `anonymized_analytics`. Audit `export.supervision`.
 
 ## Concrete steps
 
@@ -27,5 +32,22 @@
 
 ## Checks
 
-- [ ] Пройдены identifier leakage и authorization tests.
-- [ ] Repository-standard lint, typecheck и tests проходят.
+- [x] Пройдены identifier leakage и authorization tests.
+- [x] Repository-standard lint, typecheck и tests проходят.
+
+## Implementation result
+
+**Что сделано:**
+- Сервис `lib/service/supervision-export.ts`: `exportSupervision` — versioned JSON (§14), только allowlisted поля, supervisor assignment + два consent, audit trail.
+- Тесты: allowlist без clientId/raw statement; запрет без `supervisor_access`.
+
+**Изменённые/созданные файлы:**
+- `lib/service/supervision-export.ts` (новый)
+- `tests/integration/supervision-export.integration.test.ts` (новый)
+- `.scratch/live-client-map/issues/57-anonymized-supervision-export.md`
+
+**Пройденные проверки:**
+- Интеграционный тест тикета 57 (2 шт.) — pass.
+- `eslint`, `prettier`, `typecheck` — чисто.
+
+**Note:** generalized requests/goals оставлены пустыми (риск идентификаторов в свободном тексте); redaction-пайплайн и preview UI — future scope.
