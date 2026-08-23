@@ -434,6 +434,89 @@ export type Database = {
           },
         ]
       }
+      client_feedback_forms: {
+        Row: {
+          answers: Json | null
+          client_id: string
+          completed_at: string | null
+          correction_id: string | null
+          created_at: string
+          created_by: string | null
+          expires_at: string | null
+          follow_up_id: string | null
+          id: string
+          organization_id: string
+          questions: Json
+          sent_at: string | null
+          status: string
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          answers?: Json | null
+          client_id: string
+          completed_at?: string | null
+          correction_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          expires_at?: string | null
+          follow_up_id?: string | null
+          id?: string
+          organization_id: string
+          questions?: Json
+          sent_at?: string | null
+          status?: string
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          answers?: Json | null
+          client_id?: string
+          completed_at?: string | null
+          correction_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          expires_at?: string | null
+          follow_up_id?: string | null
+          id?: string
+          organization_id?: string
+          questions?: Json
+          sent_at?: string | null
+          status?: string
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "client_feedback_forms_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_feedback_forms_correction_id_fkey"
+            columns: ["correction_id"]
+            isOneToOne: false
+            referencedRelation: "corrections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_feedback_forms_follow_up_id_fkey"
+            columns: ["follow_up_id"]
+            isOneToOne: false
+            referencedRelation: "follow_ups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_feedback_forms_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       client_goals: {
         Row: {
           client_id: string
@@ -484,6 +567,50 @@ export type Database = {
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      client_portal_users: {
+        Row: {
+          client_id: string
+          created_at: string
+          created_by: string | null
+          email: string
+          id: string
+          invited_at: string
+          last_login_at: string | null
+          revoked_at: string | null
+          status: string
+        }
+        Insert: {
+          client_id: string
+          created_at?: string
+          created_by?: string | null
+          email: string
+          id?: string
+          invited_at?: string
+          last_login_at?: string | null
+          revoked_at?: string | null
+          status?: string
+        }
+        Update: {
+          client_id?: string
+          created_at?: string
+          created_by?: string | null
+          email?: string
+          id?: string
+          invited_at?: string
+          last_login_at?: string | null
+          revoked_at?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "client_portal_users_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
             referencedColumns: ["id"]
           },
         ]
@@ -1837,6 +1964,102 @@ export type Database = {
           },
         ]
       }
+      model_explanations: {
+        Row: {
+          after_snapshot_id: string | null
+          before_snapshot_id: string | null
+          client_id: string
+          created_at: string
+          created_by: string | null
+          decided_at: string | null
+          decided_by: string | null
+          explanations: Json
+          grounding: Json
+          grounding_errors: Json
+          id: string
+          missing_evidence: string[]
+          organization_id: string
+          run_id: string | null
+          source: string
+          status: string
+          versions: Json
+        }
+        Insert: {
+          after_snapshot_id?: string | null
+          before_snapshot_id?: string | null
+          client_id: string
+          created_at?: string
+          created_by?: string | null
+          decided_at?: string | null
+          decided_by?: string | null
+          explanations?: Json
+          grounding?: Json
+          grounding_errors?: Json
+          id?: string
+          missing_evidence?: string[]
+          organization_id: string
+          run_id?: string | null
+          source: string
+          status?: string
+          versions?: Json
+        }
+        Update: {
+          after_snapshot_id?: string | null
+          before_snapshot_id?: string | null
+          client_id?: string
+          created_at?: string
+          created_by?: string | null
+          decided_at?: string | null
+          decided_by?: string | null
+          explanations?: Json
+          grounding?: Json
+          grounding_errors?: Json
+          id?: string
+          missing_evidence?: string[]
+          organization_id?: string
+          run_id?: string | null
+          source?: string
+          status?: string
+          versions?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "model_explanations_after_snapshot_id_fkey"
+            columns: ["after_snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "psychological_snapshots"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "model_explanations_before_snapshot_id_fkey"
+            columns: ["before_snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "psychological_snapshots"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "model_explanations_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "model_explanations_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "model_explanations_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "ai_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       observations: {
         Row: {
           client_id: string
@@ -2639,6 +2862,60 @@ export type Database = {
           },
           {
             foreignKeyName: "resources_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      safety_reviews: {
+        Row: {
+          category: string
+          client_id: string
+          created_at: string
+          created_by: string | null
+          id: string
+          organization_id: string
+          review_status: string
+          severity: string
+          source: string | null
+          updated_at: string
+        }
+        Insert: {
+          category: string
+          client_id: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id: string
+          review_status?: string
+          severity?: string
+          source?: string | null
+          updated_at?: string
+        }
+        Update: {
+          category?: string
+          client_id?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id?: string
+          review_status?: string
+          severity?: string
+          source?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "safety_reviews_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "safety_reviews_organization_id_fkey"
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
