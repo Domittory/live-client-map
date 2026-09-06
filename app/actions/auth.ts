@@ -1,18 +1,20 @@
 "use server";
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import {
+  getEmailConfirmationRedirect,
+  getInviteDestination,
+  safeAuthRedirectPath,
+} from "@/lib/auth/onboarding";
 import { createClient } from "@/lib/supabase/server";
 
 export type AuthState = { error: string | null };
 
-function safeRedirectPath(value: string): string {
-  return value.startsWith("/") && !value.startsWith("//") ? value : "/";
-}
-
 export async function signIn(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const email = String(formData.get("email") ?? "");
   const password = String(formData.get("password") ?? "");
-  const redirectTo = safeRedirectPath(String(formData.get("redirectTo") ?? ""));
+  const redirectTo = safeAuthRedirectPath(String(formData.get("redirectTo") ?? ""));
 
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -25,20 +27,35 @@ export async function signUp(_prev: AuthState, formData: FormData): Promise<Auth
   const email = String(formData.get("email") ?? "");
   const password = String(formData.get("password") ?? "");
   const orgName = String(formData.get("orgName") ?? "").trim();
-  const inviteToken = String(formData.get("inviteToken") ?? "");
+  const rawInvite = String(formData.get("inviteToken") ?? "");
+  const invite = rawInvite ? getInviteDestination(rawInvite) : null;
 
-  if (!inviteToken && !orgName) return { error: "Укажите название организации." };
+  if (rawInvite && !invite) return { error: "Недействительная ссылка приглашения." };
+  if (!invite && !orgName) return { error: "Укажите название организации." };
 
   const supabase = await createClient();
-  const { data, error } = await supabase.auth.signUp({ email, password });
+  const origin = (await headers()).get("origin");
+  const emailRedirectTo =
+    invite && origin ? getEmailConfirmationRedirect(origin, invite.path) : null;
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    ...(emailRedirectTo
+      ? {
+          options: {
+            emailRedirectTo,
+          },
+        }
+      : {}),
+  });
   if (error) return { error: error.message };
-  if (!data.session) return { error: "Подтвердите email перед входом." };
+  if (!data.session) {
+    if (invite) redirect(`/login?redirectTo=${encodeURIComponent(invite.path)}`);
+    return { error: "Подтвердите email перед входом." };
+  }
 
-  if (inviteToken) {
-    const { error: invitationError } = await supabase.rpc("accept_invitation", {
-      p_token: inviteToken,
-    });
-    if (invitationError) return { error: invitationError.message };
+  if (invite) {
+    redirect(invite.path);
   } else {
     const { error: orgError } = await supabase.rpc("create_organization", { org_name: orgName });
     if (orgError) return { error: orgError.message };

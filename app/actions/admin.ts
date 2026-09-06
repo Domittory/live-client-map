@@ -20,6 +20,16 @@ function toState(err: unknown): AdminState {
   return { error: "Внутренняя ошибка" };
 }
 
+function toInvitationRecoveryState(err: unknown): AdminState {
+  if (err instanceof ServiceError && ["FORBIDDEN", "VALIDATION_ERROR"].includes(err.code)) {
+    return {
+      error:
+        "Не удалось принять приглашение. Войдите с email приглашения или откройте новое действительное приглашение.",
+    };
+  }
+  return toState(err);
+}
+
 export async function inviteMemberAction(
   _prev: AdminState,
   formData: FormData
@@ -120,7 +130,7 @@ export async function acceptInvitationAction(
     const supabase = await createClient();
     await acceptInvitation(supabase, String(formData.get("token") ?? ""));
   } catch (err) {
-    return toState(err);
+    return toInvitationRecoveryState(err);
   }
   redirect("/");
 }

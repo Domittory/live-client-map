@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useActionState } from "react";
 import { signIn } from "@/app/actions/auth";
+import { getSignupHrefForRedirect, safeAuthRedirectPath } from "@/lib/auth/onboarding";
 
 export default function LoginPage() {
   return (
@@ -15,7 +16,8 @@ export default function LoginPage() {
 
 function LoginForm() {
   const searchParams = useSearchParams();
-  const redirectTo = searchParams.get("redirectTo") ?? "/";
+  const redirectTo = safeAuthRedirectPath(searchParams.get("redirectTo"));
+  const signupHref = getSignupHrefForRedirect(redirectTo);
   const [state, formAction, pending] = useActionState(signIn, { error: null });
 
   return (
@@ -37,12 +39,7 @@ function LoginForm() {
         {state.error && <p className="error">{state.error}</p>}
       </form>
       <p>
-        Нет аккаунта?{" "}
-        <Link
-          href={redirectTo !== "/" ? `/signup?invite=${encodeURIComponent(redirectTo)}` : "/signup"}
-        >
-          Зарегистрироваться
-        </Link>
+        Нет аккаунта? <Link href={signupHref}>Зарегистрироваться</Link>
       </p>
       <p>
         <Link href="/forgot-password">Забыли пароль?</Link>

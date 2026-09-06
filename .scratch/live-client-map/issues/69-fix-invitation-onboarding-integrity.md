@@ -15,7 +15,7 @@ Organization и без понятного recovery flow.
 
 **Blocked by:** 02, 04, 11, 15
 
-**Status:** needs-triage
+**Status:** resolved
 
 ## Requirements
 
@@ -64,30 +64,53 @@ token. Auth account создаётся раньше, чем RPC отклоняе
 Плюс: сильнее приближает flow к атомарному. Минусы: service-role участвует в authentication path,
 есть race conditions и destructive rollback; требуется отдельный security review.
 
+### Решение для реализации
+
+Выбран вариант A — recoverable two-step flow. Signup/login/email confirmation сохраняют invite
+destination, а membership создаётся только отдельным authenticated вызовом существующего RPC.
+
 ## Acceptance criteria
 
-- [ ] Цепочка `/invite/<token> → login → signup` передаёт в `accept_invitation` исходный `<token>`.
-- [ ] Новый пользователь после регистрации принимает действительное приглашение и получает
+- [x] Цепочка `/invite/<token> → login → signup` передаёт в `accept_invitation` исходный `<token>`.
+- [x] Новый пользователь после регистрации принимает действительное приглашение и получает
       ожидаемые Organization membership и role.
-- [ ] Существующий пользователь после входа возвращается к тому же приглашению и может его принять.
-- [ ] Email confirmation, если включён, не теряет invite destination.
-- [ ] Неверный, просроченный и email-mismatched token не дают membership и приводят к безопасному,
+- [x] Существующий пользователь после входа возвращается к тому же приглашению и может его принять.
+- [x] Email confirmation, если включён, не теряет invite destination.
+- [x] Неверный, просроченный и email-mismatched token не дают membership и приводят к безопасному,
       понятному recovery state.
-- [ ] Повторная попытка с новым действительным приглашением не требует создавать ещё один аккаунт.
-- [ ] Redirect принимается только для внутренних разрешённых маршрутов; `/invite-anything` и
+- [x] Повторная попытка с новым действительным приглашением не требует создавать ещё один аккаунт.
+- [x] Redirect принимается только для внутренних разрешённых маршрутов; `/invite-anything` и
       `/login-copy` не становятся публичными из-за совпадения строкового prefix.
-- [ ] Новый flow покрыт regression-тестами на уровне route/server action и integration test RPC.
-- [ ] Существующие RLS, owner-only permissions и invitation audit не ослаблены.
+- [x] Новый flow покрыт regression-тестами на уровне route/server action и integration test RPC.
+- [x] Существующие RLS, owner-only permissions и invitation audit не ослаблены.
 
 ## Checks
 
-- [ ] Целевые regression-тесты воспроизводят оба дефекта до исправления и проходят после него.
-- [ ] `pnpm lint` проходит.
-- [ ] `pnpm typecheck` проходит.
-- [ ] `pnpm test:unit` и `pnpm test:acceptance` проходят.
-- [ ] `pnpm test:integration` проходит против запущенного локального Supabase.
-- [ ] `pnpm build` проходит.
-- [ ] `git diff --check` проходит.
+- [x] Целевые regression-тесты воспроизводят оба дефекта до исправления и проходят после него.
+- [x] `pnpm lint` проходит.
+- [x] `pnpm typecheck` проходит.
+- [x] `pnpm test:unit` и `pnpm test:acceptance` проходят.
+- [x] `pnpm test:integration` проходит против запущенного локального Supabase.
+- [x] `pnpm build` проходит.
+- [x] `git diff --check` проходит.
+
+## Implementation result
+
+- Реализован вариант A: signup/login сохраняют `/invite/<token>` как redirect destination, а
+  принятие invitation выполняется отдельным authenticated действием с raw UUID token.
+- Добавлен общий normalization helper для invite token/path и route-boundary checks, чтобы
+  `/invite-anything` и `/login-copy` не проходили как public/redirect routes.
+- Signup больше не вызывает `accept_invitation` напрямую и не создаёт Auth identity для malformed
+  invite path values; при email confirmation flow возвращает пользователя на login с сохранённым
+  invite destination.
+- Failed acceptance теперь показывает безопасный recovery state без раскрытия email или
+  Organization existence.
+- Изменены файлы: `lib/auth/onboarding.ts`, `app/actions/auth.ts`, `app/actions/admin.ts`,
+  `app/login/page.tsx`, `app/signup/page.tsx`, `lib/supabase/middleware.ts`,
+  `app/auth/callback/route.ts`, `tests/unit/auth-onboarding.unit.test.ts`,
+  `tests/integration/admin.integration.test.ts`.
+- Проверки: `pnpm lint`, `pnpm run typecheck`, `pnpm test:unit`, `pnpm test:acceptance`,
+  `pnpm test:integration`, `pnpm build`, `git diff --check`, `pnpm test`.
 
 ## Comments
 
@@ -96,3 +119,7 @@ token. Auth account создаётся раньше, чем RPC отклоняе
 - Связанные требования: тикет 02 — регистрация по приглашению сразу создаёт membership; тикет 11 —
   partial onboarding не оставляет неконсистентные записи; тикет 15 — email приглашения должен
   совпадать и acceptance проходит через защищённый RPC.
+- Реализация: выбран вариант A. Signup/login сохраняют `/invite/<token>` как destination, но RPC
+  получает только UUID token через отдельное authenticated acceptance действие. Невалидные route
+  prefix collisions отклоняются до auth signup; failed acceptance остаётся recoverable через новое
+  действительное приглашение.

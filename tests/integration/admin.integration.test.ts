@@ -72,16 +72,16 @@ async function signIn(email: string, password: string): Promise<SupabaseClient> 
   return client;
 }
 
-async function inviteAndAccept(
+async function inviteMemberAndGetToken(
   admin: SupabaseClient,
   ownerClient: SupabaseClient,
   orgId: string,
-  member: { email: string; password: string },
+  email: string,
   role: "specialist" | "supervisor"
-): Promise<void> {
+): Promise<string> {
   const { data: invitationId, error: inviteError } = await ownerClient.rpc("invite_member", {
     p_org_id: orgId,
-    p_email: member.email,
+    p_email: email,
     p_role: role,
   });
   expect(inviteError).toBeNull();
@@ -91,10 +91,21 @@ async function inviteAndAccept(
     .select("token")
     .eq("id", invitationId)
     .single();
+  expect(invitation).not.toBeNull();
+  return invitation!.token;
+}
 
+async function inviteAndAccept(
+  admin: SupabaseClient,
+  ownerClient: SupabaseClient,
+  orgId: string,
+  member: { email: string; password: string },
+  role: "specialist" | "supervisor"
+): Promise<void> {
+  const token = await inviteMemberAndGetToken(admin, ownerClient, orgId, member.email, role);
   const memberClient = await signIn(member.email, member.password);
   const { error: acceptError } = await memberClient.rpc("accept_invitation", {
-    p_token: invitation!.token,
+    p_token: token,
   });
   expect(acceptError).toBeNull();
 }
@@ -158,6 +169,116 @@ describe.skipIf(!available)("organization admin (requires local Supabase)", () =
     const actions = (audit ?? []).map((row) => row.action);
     expect(actions).toContain("member.invite");
     expect(actions).toContain("member.accept");
+  });
+
+  it("keeps failed invitation acceptance recoverable for the invited email", async () => {
+    const admin = adminClient();
+    const owner = await createUser(admin, "recover-owner");
+    const invited = await createUser(admin, "recover-invited");
+    const other = await createUser(admin, "recover-other");
+    const orgId = await createOrg(admin, owner, "recover");
+    const ownerClient = await signIn(owner.email, owner.password);
+
+    const token = await inviteMemberAndGetToken(
+      admin,
+      ownerClient,
+      orgId,
+      invited.email,
+      "specialist"
+    );
+    const otherClient = await signIn(other.email, other.password);
+
+    const { error: mismatchError } = await otherClient.rpc("accept_invitation", {
+      p_token: token,
+    });
+    expect(mismatchError!.code).toBe("42501");
+
+    const { data: otherMemberships } = await admin
+      .from("organization_members")
+      .select("id")
+      .eq("organization_id", orgId)
+      .eq("user_id", other.userId);
+    expect(otherMemberships).toHaveLength(0);
+
+    const invitedClient = await signIn(invited.email, invited.password);
+    const { error: recoverError } = await invitedClient.rpc("accept_invitation", {
+      p_token: token,
+    });
+    expect(recoverError).toBeNull();
+
+    const { data: invitedMembership } = await admin
+      .from("organization_members")
+      .select("role, status")
+      .eq("organization_id", orgId)
+      .eq("user_id", invited.userId)
+      .single();
+    expect(invitedMembership).toEqual({ role: "specialist", status: "active" });
+  });
+
+  it("lets an existing account recover from an expired invitation by accepting a fresh invite", async () => {
+    const admin = adminClient();
+    const owner = await createUser(admin, "expired-owner");
+    const invited = await createUser(admin, "expired-invited");
+    const orgId = await createOrg(admin, owner, "expired");
+    const ownerClient = await signIn(owner.email, owner.password);
+
+    const { data: expiredInvitationId, error: inviteError } = await ownerClient.rpc(
+      "invite_member",
+      {
+        p_org_id: orgId,
+        p_email: invited.email,
+        p_role: "specialist",
+      }
+    );
+    expect(inviteError).toBeNull();
+
+    const { data: expiredInvitation } = await admin
+      .from("organization_invitations")
+      .update({ expires_at: new Date(Date.now() - 60_000).toISOString() })
+      .eq("id", expiredInvitationId)
+      .select("token")
+      .single();
+    const invitedClient = await signIn(invited.email, invited.password);
+
+    const { error: expiredError } = await invitedClient.rpc("accept_invitation", {
+      p_token: expiredInvitation!.token,
+    });
+    expect(expiredError!.code).toBe("22023");
+
+    const { data: membershipsAfterExpired } = await admin
+      .from("organization_members")
+      .select("id")
+      .eq("organization_id", orgId)
+      .eq("user_id", invited.userId);
+    expect(membershipsAfterExpired).toHaveLength(0);
+
+    const { data: freshInvitationId, error: reinviteError } = await ownerClient.rpc(
+      "invite_member",
+      {
+        p_org_id: orgId,
+        p_email: invited.email,
+        p_role: "supervisor",
+      }
+    );
+    expect(reinviteError).toBeNull();
+
+    const { data: freshInvitation } = await admin
+      .from("organization_invitations")
+      .select("token")
+      .eq("id", freshInvitationId)
+      .single();
+    const { error: freshAcceptError } = await invitedClient.rpc("accept_invitation", {
+      p_token: freshInvitation!.token,
+    });
+    expect(freshAcceptError).toBeNull();
+
+    const { data: membership } = await admin
+      .from("organization_members")
+      .select("role, status")
+      .eq("organization_id", orgId)
+      .eq("user_id", invited.userId)
+      .single();
+    expect(membership).toEqual({ role: "supervisor", status: "active" });
   });
 
   it("enforces the role matrix: only the owner performs admin mutations", async () => {
