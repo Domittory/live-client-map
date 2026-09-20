@@ -127,7 +127,9 @@ describe.skipIf(!available)("atomic corrections, observations and history (ticke
     entries: [string, string][],
     action: () => PromiseLike<unknown>
   ): Promise<void> {
-    for (const [point, marker] of entries) await faults.register(point, marker);
+    // Actor-scoped: a broad marker (e.g. a status value) can then never trip a
+    // follow-up/observation write performed by another test file in parallel.
+    for (const [point, marker] of entries) await faults.register(point, marker, specialist.id);
     try {
       await expect(Promise.resolve(action())).rejects.toThrow();
     } finally {

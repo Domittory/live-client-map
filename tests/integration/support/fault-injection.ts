@@ -23,8 +23,12 @@ export const DEFAULT_DB_URL = "postgresql://postgres:postgres@127.0.0.1:54322/po
  */
 export interface FaultInjection {
   available: boolean;
-  /** Fail the next write to `point` whose row contains `marker`. */
-  register(point: string, marker: string): Promise<void>;
+  /**
+   * Fail the next write to `point` whose row contains `marker`. When `actorId`
+   * is given the fault only applies to writes made by that user, which keeps
+   * broad markers safe while other test files run in parallel.
+   */
+  register(point: string, marker: string, actorId?: string): Promise<void>;
   /** Remove the faults registered by this helper instance. */
   clear(): Promise<void>;
   close(): Promise<void>;
@@ -50,10 +54,10 @@ export async function connectFaultInjection(
 
   return {
     available,
-    async register(point, marker) {
+    async register(point, marker, actorId) {
       await pg!.query(
-        "insert into test_support.faults (owner, point, marker) values ($1, $2, $3)",
-        [owner, point, marker]
+        "insert into test_support.faults (owner, point, marker, actor) values ($1, $2, $3, $4)",
+        [owner, point, marker, actorId ?? null]
       );
     },
     async clear() {

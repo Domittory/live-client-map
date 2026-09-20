@@ -23,6 +23,10 @@ create table test_support.faults (
   owner text not null,
   point text not null,
   marker text not null,
+  -- Optional JWT subject this fault is limited to. When set, the fault only
+  -- fires for writes made by that actor, so two test files running in parallel
+  -- can never trip each other's faults even with a broad marker.
+  actor uuid,
   created_at timestamptz not null default now()
 );
 
@@ -46,6 +50,7 @@ begin
     select 1
     from test_support.faults f
     where f.point = tg_table_name
+      and (f.actor is null or f.actor = auth.uid())
       and position(f.marker in v_row) > 0
   ) then
     raise exception 'injected fault on % (%)', tg_table_name, tg_op
