@@ -119,7 +119,10 @@ begin
     'erasure_requests',
     'ai_runs',
     'safety_reviews',
-    'client_portal_users'
+    'client_portal_users',
+    -- Ticket 19: the asynchronous ExportRequest lifecycle. The completion write
+    -- and its audit append must roll back together.
+    'export_requests'
   ]
   loop
     execute format(

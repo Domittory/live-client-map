@@ -129,6 +129,40 @@ export type ClientArchiveData = {
   reference_catalog: Record<string, ArchiveRow[]>;
 } & { [K in ArchiveCollection]: ArchiveRow[] };
 
+/**
+ * One built artifact together with everything an ExportRequest records about it
+ * (ticket 19). `content` is the exact serialized file; `counts` and
+ * `warnings` never carry raw content or identifiers.
+ */
+export interface ClientArchiveArtifact {
+  content: string;
+  content_type: string;
+  byte_size: number;
+  content_sha256: string;
+  counts: Record<string, number>;
+  warnings: ArchiveWarning[];
+}
+
+/** Media type of the §11 archive, used for the stored object and the download. */
+export const CLIENT_ARCHIVE_MEDIA_TYPE = "application/vnd.live-client-map.client-archive+json";
+
+/** Everything `assembleClientArchive()` read, before the manifest is built. */
+export interface ClientArchiveInput {
+  organizationId: string;
+  clientId: string;
+  /** The subject client row, already without `organization_id`. */
+  client: ArchiveRow | null;
+  /** Policy-applied collections (dangling references already replaced). */
+  collections: Record<string, ArchiveRow[]>;
+  referenceCatalog: Record<string, ArchiveRow[]>;
+  /** Warnings collected before the manifest (reference/relationship/evidence counts). */
+  warnings: ArchiveWarning[];
+  /** Export request that owns this archive (ticket 19); defaults to a new UUID. */
+  exportId?: string;
+  /** Generation timestamp; defaults to now. */
+  generatedAt?: string;
+}
+
 // --- Canonical serialization and hashing ---------------------------------------
 
 /**
@@ -896,10 +930,15 @@ async function loadParentScoped(
  * Assemble the full archive for one client. Read-only; the caller audits the
  * completed export. Returns the organization id alongside so the caller does not
  * have to resolve access a second time.
+ *
+ * `options.exportId` lets the asynchronous ExportRequest path (ticket 19) make
+ * the archive's `export_id` the identifier of the request that produced it, so
+ * the stored file and the request row agree. Without it a fresh UUID is used.
  */
 export async function assembleClientArchive(
   client: SupabaseClient,
-  rawClientId: string
+  rawClientId: string,
+  options: { exportId?: string; generatedAt?: string } = {}
 ): Promise<{ archive: ClientArchive; organizationId: string }> {
   const clientId = validate(uuid, rawClientId);
 
@@ -989,14 +1028,47 @@ export async function assembleClientArchive(
   const clientPayload = { ...clientRecord };
   delete clientPayload.organization_id;
 
+  const archive = await buildClientArchive(client, {
+    organizationId,
+    clientId,
+    client: clientPayload,
+    collections: policy.data,
+    referenceCatalog,
+    warnings,
+    exportId: options.exportId,
+    generatedAt: options.generatedAt,
+  });
+
+  return { archive, organizationId };
+}
+
+/**
+ * Build the contract-shaped archive, its manifest and its serialized artifact
+ * from an already-authorized, already-read data set.
+ *
+ * This is the single place where the manifest is derived (ticket 18) and where
+ * the artifact bytes and their checksum are produced (ticket 19), so the
+ * synchronous service path and the asynchronous ExportRequest path cannot
+ * disagree about the file. It performs no reads and no authorization: the caller
+ * owns tenant/assignment/consent checks and the audit trail.
+ *
+ * `warnings` are the counts collected by the caller (relationship/evidence
+ * privacy); the manifest's own `dangling_reference` warnings are merged here.
+ */
+export async function buildClientArchive(
+  client: SupabaseClient,
+  input: ClientArchiveInput
+): Promise<ClientArchive> {
+  const { organizationId, clientId, collections, referenceCatalog } = input;
+
   // `data` follows the contract key order: client, every collection in declared
   // order, then reference_catalog. Every collection is present.
   const data = {
-    client: clientPayload,
+    client: input.client,
     ...Object.fromEntries(
       ARCHIVE_COLLECTIONS.map((collection) => [
         collection,
-        orderRows(policy.data[collection] ?? [], sortKeysFor(collection)),
+        orderRows(collections[collection] ?? [], sortKeysFor(collection)),
       ])
     ),
     reference_catalog: referenceCatalog,
@@ -1004,6 +1076,10 @@ export async function assembleClientArchive(
 
   const recommendations = data.recommendations;
   const snapshots = data.psychological_snapshots;
+
+  // `input.warnings` already contains the reference policy's `dangling_reference`
+  // counts plus the relationship/evidence privacy counts collected by the caller.
+  const warnings = mergeWarnings(input.warnings);
 
   const manifest: ClientArchiveManifest = {
     data_dictionary_version: DATA_DICTIONARY_VERSION,
@@ -1031,8 +1107,8 @@ export async function assembleClientArchive(
   const archive: ClientArchive = {
     contract: CLIENT_ARCHIVE_CONTRACT,
     version: CLIENT_ARCHIVE_VERSION,
-    export_id: randomUUID(),
-    generated_at: new Date().toISOString(),
+    export_id: input.exportId ?? randomUUID(),
+    generated_at: input.generatedAt ?? new Date().toISOString(),
     source_organization_id: organizationId,
     subject_client_id: clientId,
     manifest,
@@ -1040,7 +1116,50 @@ export async function assembleClientArchive(
   };
 
   validateClientArchive(archive);
-  return { archive, organizationId };
+  return archive;
+}
+
+/**
+ * Collect warnings from any number of sources into one deterministic list.
+ * Exported because the ExportRequest path adds its own counts and must produce
+ * the identical ordering.
+ */
+export function mergeWarnings(
+  ...sources: ReadonlyArray<readonly ArchiveWarning[]>
+): ArchiveWarning[] {
+  const merged = new Map<string, ArchiveWarning>();
+  for (const source of sources) {
+    for (const warning of source) {
+      const key = warningKey(warning.code, warning.collection, warning.field);
+      const current = merged.get(key);
+      merged.set(key, {
+        code: warning.code,
+        collection: warning.collection,
+        field: warning.field,
+        count: (current?.count ?? 0) + warning.count,
+      });
+    }
+  }
+  return [...merged.values()].sort(compareWarnings);
+}
+
+/**
+ * Canonical serialization of an assembled archive plus the metadata an
+ * ExportRequest records: byte size and the lowercase-hex SHA-256 of the exact
+ * stored bytes. The artifact IS the contract file — no wrapper, no added
+ * fields — so a download is a valid §11 archive.
+ */
+export function buildClientArchiveArtifact(archive: ClientArchive): ClientArchiveArtifact {
+  validateClientArchive(archive);
+  const content = canonicalStringify(archive);
+  return {
+    content,
+    content_type: CLIENT_ARCHIVE_MEDIA_TYPE,
+    byte_size: Buffer.byteLength(content, "utf8"),
+    content_sha256: createHash("sha256").update(content, "utf8").digest("hex"),
+    counts: { ...archive.manifest.record_counts },
+    warnings: archive.manifest.warnings,
+  };
 }
 
 /** Ontology version strings referenced by snapshots and included domains. */

@@ -53,12 +53,44 @@ const signalsExportQuerySchema = exportQuerySchema.extend({
   includeArchived: z.boolean().optional(),
 });
 
+/** §12: media type of the Signals CSV artifact. */
+export const SIGNALS_CSV_MEDIA_TYPE = "text/csv";
+
+/** §12: exact contract identifier of the Signals CSV export. */
+export const SIGNALS_CSV_CONTRACT = "live-client-map.signals-csv";
+export const SIGNALS_CSV_VERSION = "1.0";
+
 function csvCell(value: unknown): string {
   const s = value === null || value === undefined ? "" : String(value);
   if (/[",\n\r]/.test(s)) {
     return `"${s.replaceAll('"', '""')}"`;
   }
   return s;
+}
+
+/**
+ * §12 serialization of the selected Signals. Pure: the asynchronous
+ * ExportRequest path (ticket 19) uses this same function, so the file a request
+ * produces is byte-identical to the synchronous CSV export for the same rows.
+ */
+export function renderSignalsCsv(signals: readonly Record<string, unknown>[]): string {
+  const rows: string[][] = [CSV_COLUMNS];
+  for (const signal of signals) {
+    rows.push(
+      CSV_COLUMNS.map((column) => {
+        if (column === "contract_version") return "live-client-map.signals-csv/1.0";
+        if (column === "external_id") return String(signal.id);
+        if (column === "source_ref") return String(signal.source_ref_id ?? "");
+        if (column === "life_areas_json") return JSON.stringify(signal.life_areas ?? []);
+        if (column === "tags_json") return JSON.stringify(signal.tags ?? []);
+        if (column === "context_json") return JSON.stringify(signal.context ?? null);
+        if (column === "source_review_status") return String(signal.review_status ?? "");
+        if (column === "claimed_evidence_level") return String(signal.evidence_level ?? "");
+        return String(signal[column] ?? "");
+      })
+    );
+  }
+  return rows.map((row) => row.map(csvCell).join(",")).join("\n");
 }
 
 /**
@@ -109,17 +141,45 @@ export async function requireExportAccess(
 
 export async function exportSignalsCsv(client: SupabaseClient, rawQuery: unknown): Promise<string> {
   const query = validate(signalsExportQuerySchema, rawQuery ?? {});
-  const { organizationId, role } = await requireExportAccess(client, query.clientId, true);
+  const source = await loadSignalsForExport(client, {
+    clientId: query.clientId,
+    includeArchived: query.includeArchived,
+  });
 
-  // §12: deterministic row order is `source_created_at`, then `external_id`
-  // (the Signal UUID); archived rows are excluded unless explicitly requested.
+  const csv = renderSignalsCsv(source.signals);
+
+  await recordAudit(client, {
+    organizationId: source.organizationId,
+    entityType: "client",
+    entityId: query.clientId,
+    action: "export.signals_csv",
+    after: { signals: source.signals.length },
+  });
+  incrementCounter("export_total", "Total exports by type", { type: "signals_csv" });
+  return csv;
+}
+
+/**
+ * Authorized Signals read shared by the synchronous CSV export and the
+ * asynchronous ExportRequest (ticket 19): tenant + assignment + `data_storage`
+ * consent, deterministic `created_at, id` order, archived rows excluded unless
+ * explicitly requested, and `sensitive` rows removed for a secondary specialist.
+ * Exported so both export paths cannot apply different visibility rules.
+ */
+export async function loadSignalsForExport(
+  client: SupabaseClient,
+  input: { clientId: string; includeArchived?: boolean }
+): Promise<{ organizationId: string; role: string | null; signals: Record<string, unknown>[] }> {
+  const clientId = validate(uuid, input.clientId);
+  const { organizationId, role } = await requireExportAccess(client, clientId, true);
+
   let request = client
     .from("signals")
     .select("*")
-    .eq("client_id", query.clientId)
+    .eq("client_id", clientId)
     .order("created_at", { ascending: true })
     .order("id", { ascending: true });
-  if (!query.includeArchived) {
+  if (!input.includeArchived) {
     request = request.is("archived_at", null);
   }
   if (role === "secondary_specialist") {
@@ -129,34 +189,11 @@ export async function exportSignalsCsv(client: SupabaseClient, rawQuery: unknown
   const { data: signals, error } = await request;
   if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to export signals");
 
-  const rows: string[][] = [CSV_COLUMNS];
-  for (const signal of (signals ?? []) as Record<string, unknown>[]) {
-    rows.push(
-      CSV_COLUMNS.map((column) => {
-        if (column === "contract_version") return "live-client-map.signals-csv/1.0";
-        if (column === "external_id") return String(signal.id);
-        if (column === "source_ref") return String(signal.source_ref_id ?? "");
-        if (column === "life_areas_json") return JSON.stringify(signal.life_areas ?? []);
-        if (column === "tags_json") return JSON.stringify(signal.tags ?? []);
-        if (column === "context_json") return JSON.stringify(signal.context ?? null);
-        if (column === "source_review_status") return String(signal.review_status ?? "");
-        if (column === "claimed_evidence_level") return String(signal.evidence_level ?? "");
-        return String(signal[column] ?? "");
-      })
-    );
-  }
-
-  const csv = rows.map((row) => row.map(csvCell).join(",")).join("\n");
-
-  await recordAudit(client, {
+  return {
     organizationId,
-    entityType: "client",
-    entityId: query.clientId,
-    action: "export.signals_csv",
-    after: { signals: rows.length - 1 },
-  });
-  incrementCounter("export_total", "Total exports by type", { type: "signals_csv" });
-  return csv;
+    role,
+    signals: (signals ?? []) as Record<string, unknown>[],
+  };
 }
 
 /**

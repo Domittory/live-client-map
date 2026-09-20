@@ -90,6 +90,90 @@ async function requireSupervisor(client: SupabaseClient, clientId: string): Prom
   return organizationId;
 }
 
+/** Rows the §14 projection needs, already filtered and deterministically ordered. */
+export interface SupervisionSource {
+  organizationId: string;
+  themes: Record<string, unknown>[];
+  coreNodes: Record<string, unknown>[];
+  resources: Record<string, unknown>[];
+  developmentTargets: Record<string, unknown>[];
+  corrections: Record<string, unknown>[];
+  signals: Record<string, unknown>[];
+}
+
+/**
+ * Supervisor authorization plus the exact §14 read set. Exported so the
+ * synchronous export and the asynchronous ExportRequest (ticket 19) read one
+ * identical, `sensitive`-free projection instead of drifting apart.
+ */
+export async function loadSupervisionSource(
+  client: SupabaseClient,
+  clientId: string
+): Promise<SupervisionSource> {
+  const organizationId = await requireSupervisor(client, clientId);
+
+  // Deterministic ordering everywhere, so two exports of unchanged data differ
+  // only in the export metadata. `sensitive` rows never reach a Supervisor.
+  const [themes, coreNodes, resources, targets, corrections, signals] = await Promise.all([
+    client
+      .from("themes")
+      .select("name, confidence_score")
+      .eq("client_id", clientId)
+      .eq("review_status", "approved")
+      .neq("visibility", "sensitive")
+      .order("name", { ascending: true }),
+    client
+      .from("core_nodes")
+      .select("title, confidence_score")
+      .eq("client_id", clientId)
+      .eq("status", "active")
+      .neq("visibility", "sensitive")
+      .order("title", { ascending: true }),
+    client
+      .from("resources")
+      .select("name, strength_score")
+      .eq("client_id", clientId)
+      .eq("status", "active")
+      .neq("visibility", "sensitive")
+      .order("name", { ascending: true }),
+    client
+      .from("development_targets")
+      .select("name, current_level, target_level")
+      .eq("client_id", clientId)
+      .eq("status", "active")
+      .order("name", { ascending: true }),
+    client
+      .from("corrections")
+      .select("status")
+      .eq("client_id", clientId)
+      .is("archived_at", null)
+      .order("id", { ascending: true }),
+    client
+      .from("signals")
+      .select("evidence_level")
+      .eq("client_id", clientId)
+      .eq("review_status", "approved")
+      .neq("visibility", "sensitive")
+      .order("id", { ascending: true }),
+  ]);
+
+  const results = [themes, coreNodes, resources, targets, corrections, signals];
+  for (const result of results) {
+    if (result.error)
+      throw new ServiceError("INTERNAL_ERROR", "Failed to assemble supervision export");
+  }
+
+  return {
+    organizationId,
+    themes: (themes.data ?? []) as Record<string, unknown>[],
+    coreNodes: (coreNodes.data ?? []) as Record<string, unknown>[],
+    resources: (resources.data ?? []) as Record<string, unknown>[],
+    developmentTargets: (targets.data ?? []) as Record<string, unknown>[],
+    corrections: (corrections.data ?? []) as Record<string, unknown>[],
+    signals: (signals.data ?? []) as Record<string, unknown>[],
+  };
+}
+
 /**
  * §14 allowlist check. Runs on the assembled payload BEFORE it leaves the
  * service, so a stray field is a typed failure rather than a disclosure.
@@ -128,100 +212,66 @@ export function assertAllowlistedProjection(payload: Record<string, unknown>): v
   }
 }
 
-export async function exportSupervision(
-  client: SupabaseClient,
-  rawQuery: unknown
-): Promise<unknown> {
-  const query = validate(supervisionExportSchema, rawQuery ?? {});
-  const organizationId = await requireSupervisor(client, query.clientId);
-
-  // Deterministic ordering everywhere, so two exports of unchanged data differ
-  // only in the export metadata. `sensitive` rows never reach a Supervisor.
-  const [themes, coreNodes, resources, targets, corrections, signals] = await Promise.all([
-    client
-      .from("themes")
-      .select("name, confidence_score")
-      .eq("client_id", query.clientId)
-      .eq("review_status", "approved")
-      .neq("visibility", "sensitive")
-      .order("name", { ascending: true }),
-    client
-      .from("core_nodes")
-      .select("title, confidence_score")
-      .eq("client_id", query.clientId)
-      .eq("status", "active")
-      .neq("visibility", "sensitive")
-      .order("title", { ascending: true }),
-    client
-      .from("resources")
-      .select("name, strength_score")
-      .eq("client_id", query.clientId)
-      .eq("status", "active")
-      .neq("visibility", "sensitive")
-      .order("name", { ascending: true }),
-    client
-      .from("development_targets")
-      .select("name, current_level, target_level")
-      .eq("client_id", query.clientId)
-      .eq("status", "active")
-      .order("name", { ascending: true }),
-    client
-      .from("corrections")
-      .select("status")
-      .eq("client_id", query.clientId)
-      .is("archived_at", null)
-      .order("id", { ascending: true }),
-    client
-      .from("signals")
-      .select("evidence_level")
-      .eq("client_id", query.clientId)
-      .eq("review_status", "approved")
-      .neq("visibility", "sensitive")
-      .order("id", { ascending: true }),
-  ]);
-
-  const results = [themes, coreNodes, resources, targets, corrections, signals];
-  for (const result of results) {
-    if (result.error)
-      throw new ServiceError("INTERNAL_ERROR", "Failed to assemble supervision export");
-  }
-
+/**
+ * The §14 `case` object, projected from already-read rows. Pure on purpose: the
+ * asynchronous ExportRequest path (ticket 19) reuses exactly this function, so a
+ * synchronous and an asynchronous supervision export cannot drift apart.
+ * `sensitive` rows never reach a Supervisor; the caller is responsible for
+ * excluding them (see `loadSupervisionSource`).
+ */
+export function projectSupervisionCase(rows: {
+  themes: readonly Record<string, unknown>[];
+  coreNodes: readonly Record<string, unknown>[];
+  resources: readonly Record<string, unknown>[];
+  developmentTargets: readonly Record<string, unknown>[];
+  corrections: readonly Record<string, unknown>[];
+  signals: readonly Record<string, unknown>[];
+}): Record<string, unknown> {
   // Aggregate evidence by evidence level — counts only, never raw statements.
   const evidenceCounts = new Map<string, number>();
-  for (const signal of (signals.data ?? []) as { evidence_level: string }[]) {
-    evidenceCounts.set(signal.evidence_level, (evidenceCounts.get(signal.evidence_level) ?? 0) + 1);
+  for (const signal of rows.signals) {
+    const level = String(signal.evidence_level);
+    evidenceCounts.set(level, (evidenceCounts.get(level) ?? 0) + 1);
   }
 
-  const casePayload: Record<string, unknown> = {
+  return {
     generalized_requests: [],
     generalized_goals: [],
     evidence_summary: [...evidenceCounts.entries()]
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([evidence_level, count]) => ({ evidence_level, count })),
-    themes: (themes.data ?? []).map((t) => ({
-      name: (t as { name: string }).name,
-      confidence_score: (t as { confidence_score: number | null }).confidence_score,
+    themes: rows.themes.map((t) => ({
+      name: t.name,
+      confidence_score: t.confidence_score,
     })),
-    core_hypotheses: (coreNodes.data ?? []).map((n) => ({
-      title: (n as { title: string }).title,
-      confidence_score: (n as { confidence_score: number | null }).confidence_score,
+    core_hypotheses: rows.coreNodes.map((n) => ({
+      title: n.title,
+      confidence_score: n.confidence_score,
     })),
     contradictions: [],
-    resources: (resources.data ?? []).map((r) => ({
-      name: (r as { name: string }).name,
-      strength_score: (r as { strength_score: number | null }).strength_score,
+    resources: rows.resources.map((r) => ({
+      name: r.name,
+      strength_score: r.strength_score,
     })),
-    development_targets: (targets.data ?? []).map((t) => ({
-      name: (t as { name: string }).name,
-      current_level: (t as { current_level: number | null }).current_level,
-      target_level: (t as { target_level: number | null }).target_level,
+    development_targets: rows.developmentTargets.map((t) => ({
+      name: t.name,
+      current_level: t.current_level,
+      target_level: t.target_level,
     })),
-    corrections_and_outcomes: (corrections.data ?? []).map((c) => ({
-      status: (c as { status: string }).status,
-    })),
+    corrections_and_outcomes: rows.corrections.map((c) => ({ status: c.status })),
     trend_summary: null,
     supervision_questions: [],
   };
+}
+
+export async function exportSupervision(
+  client: SupabaseClient,
+  rawQuery: unknown
+): Promise<unknown> {
+  const query = validate(supervisionExportSchema, rawQuery ?? {});
+  const source = await loadSupervisionSource(client, query.clientId);
+
+  const casePayload = projectSupervisionCase(source);
 
   assertAllowlistedProjection(casePayload);
 
@@ -236,7 +286,7 @@ export async function exportSupervision(
   };
 
   await recordAudit(client, {
-    organizationId,
+    organizationId: source.organizationId,
     entityType: "client",
     entityId: query.clientId,
     action: "export.supervision",
