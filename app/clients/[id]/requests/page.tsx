@@ -1,31 +1,22 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
 import { listGoals, listRequests } from "@/lib/service/requests";
 import { RequestsForms } from "./requests-forms";
+import { requireClientWorkspace } from "../workspace";
+import { ClientWorkspaceHeader } from "../workspace-nav";
 
 export default async function ClientRequestsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  // Shared workspace guard: unassigned/unauthorized callers get the neutral
+  // denial before any client data is read.
+  const { supabase, client, access } = await requireClientWorkspace(id);
 
-  const { data: membership } = await supabase
-    .from("organization_members")
-    .select("organization_id")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (!membership) redirect("/login");
-
-  const requests = (await listRequests(supabase, membership.organization_id, id)) as Array<{
+  const requests = (await listRequests(supabase, client.organization_id, id)) as Array<{
     id: string;
     title: string;
     status: string;
     priority: string;
   }>;
-  const goals = (await listGoals(supabase, membership.organization_id, id)) as Array<{
+  const goals = (await listGoals(supabase, client.organization_id, id)) as Array<{
     id: string;
     title: string;
     status: string;
@@ -34,7 +25,8 @@ export default async function ClientRequestsPage({ params }: { params: Promise<{
 
   return (
     <main className="shell">
-      <h1>Запросы и цели</h1>
+      <ClientWorkspaceHeader client={client} access={access} current="requests" />
+      <h2>Запросы и цели</h2>
       <p>
         <Link href={`/clients/${id}`}>← Профиль клиента</Link>
       </p>

@@ -1,23 +1,17 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
 import { previewErasure } from "@/lib/service/erasure";
-import { getClient } from "@/lib/service/clients";
 import { getClientOverview } from "@/lib/service/overview";
 import { getServiceClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
 import { ClientEditForm } from "./client-edit-form";
 import { ErasureForm } from "./erasure-form";
+import { ClientWorkspaceHeader } from "./workspace-nav";
+import { requireClientWorkspace } from "./workspace";
 
 export default async function ClientProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
-
-  const client = await getClient(supabase, id);
-  if (!client) notFound();
+  // Server-side guard: an unassigned or unauthorized user never reaches the
+  // client metadata below (safe denial with no client data in the response).
+  const { supabase, client, access } = await requireClientWorkspace(id);
 
   const overview = await getClientOverview(supabase, {
     organizationId: client.organization_id,
@@ -26,12 +20,9 @@ export default async function ClientProfilePage({ params }: { params: Promise<{ 
 
   // Erasure management is Owner-only. The section below is gated so specialists
   // never see the destructive controls or the per-table impact preview.
-  const { data: isOwner } = await supabase.rpc("is_org_owner", {
-    org_id: client.organization_id,
-  });
   let erasurePreview: Awaited<ReturnType<typeof previewErasure>> | null = null;
   let erasureError: string | null = null;
-  if (isOwner) {
+  if (access.isOwner) {
     try {
       erasurePreview = await previewErasure(supabase, getServiceClient(), id);
     } catch (err) {
@@ -42,33 +33,22 @@ export default async function ClientProfilePage({ params }: { params: Promise<{ 
 
   return (
     <main className="shell">
-      <h1>{client.display_name ?? client.first_name ?? "Клиент"}</h1>
-      <p>
-        <Link href="/clients">← Клиенты</Link>
-      </p>
-      <p>Статус: {client.status}</p>
+      <ClientWorkspaceHeader client={client} access={access} current="overview" />
+
       {client.client_visible_notes && <p>Заметка клиенту: {client.client_visible_notes}</p>}
       {client.specialist_notes_private && (
         <p>Приватная заметка: {client.specialist_notes_private}</p>
       )}
 
-      <section>
-        <h2>Работа с клиентом</h2>
-        <p>
-          <Link href={`/clients/${id}/requests`}>Запросы и цели →</Link>
-        </p>
-        <p>
-          <Link href={`/clients/${id}/map`}>Живая карта →</Link>
-        </p>
-      </section>
+      {access.canWrite ? (
+        <ClientEditForm
+          clientId={id}
+          displayName={client.display_name ?? ""}
+          occupation={client.occupation ?? ""}
+        />
+      ) : null}
 
-      <ClientEditForm
-        clientId={id}
-        displayName={client.display_name ?? ""}
-        occupation={client.occupation ?? ""}
-      />
-
-      {isOwner ? (
+      {access.isOwner ? (
         <section>
           <h2>Удаление данных</h2>
           {erasureError ? <p role="alert">{erasureError}</p> : null}

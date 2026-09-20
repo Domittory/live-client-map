@@ -1,24 +1,46 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { grantClientAssignment, revokeClientAssignment } from "@/lib/service/client-access";
+import { getClient } from "@/lib/service/clients";
+import { ServiceError } from "@/lib/service/errors";
 import { createClient } from "@/lib/supabase/server";
-import { getServiceClient } from "@/lib/supabase/admin";
 
 export type AssignmentState = { error: string | null };
 
-async function currentOrgId(): Promise<string | null> {
+/**
+ * Client-context assignment mutations (ticket 09).
+ *
+ * Every action resolves the client through RLS before doing anything: an
+ * unassigned or foreign caller gets the same neutral denial as a missing
+ * client, with no metadata in the response. The organization is taken from the
+ * client row, never from the form, and the database RPC re-checks the Owner
+ * rule on the write itself.
+ */
+
+const DENIED = "Клиент недоступен или у вас нет прав.";
+
+async function loadClient(clientId: string) {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return null;
+  if (!user) return { supabase, client: null };
 
-  const { data: membership } = await supabase
-    .from("organization_members")
-    .select("organization_id")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  return membership?.organization_id ?? null;
+  const client = await getClient(supabase, clientId);
+  return { supabase, client };
+}
+
+function messageFor(err: unknown, fallback: string): string {
+  if (err instanceof ServiceError) {
+    if (err.code === "FORBIDDEN") return "Недостаточно прав: управлять доступом может владелец.";
+    if (err.code === "NOT_FOUND") {
+      return "Пользователь с таким email не найден среди активных участников организации.";
+    }
+    if (err.code === "VALIDATION_ERROR") return "Проверьте выбранную роль доступа.";
+    if (err.code === "CONFLICT") return "Такое назначение уже существует.";
+  }
+  return fallback;
 }
 
 export async function grantAssignment(
@@ -26,32 +48,27 @@ export async function grantAssignment(
   formData: FormData
 ): Promise<AssignmentState> {
   const clientId = String(formData.get("clientId") ?? "").trim();
-  const email = String(formData.get("email") ?? "")
-    .trim()
-    .toLowerCase();
-  const role = String(formData.get("role") ?? "read_only");
+  const email = String(formData.get("email") ?? "").trim();
+  const accessRole = String(formData.get("accessRole") ?? "read_only");
 
-  if (!clientId) return { error: "Укажите client_id." };
-  if (!email) return { error: "Укажите email." };
+  if (!clientId) return { error: "Клиент не указан." };
+  if (!email) return { error: "Выберите участника." };
 
-  const orgId = await currentOrgId();
-  if (!orgId) return { error: "Организация не найдена." };
+  const { supabase, client } = await loadClient(clientId);
+  if (!client) return { error: DENIED };
 
-  const admin = getServiceClient();
-  const { data, error: listError } = await admin.auth.admin.listUsers({ perPage: 1000 });
-  if (listError) return { error: listError.message };
-  const target = data.users.find((u) => u.email?.toLowerCase() === email);
-  if (!target) return { error: "Пользователь с таким email не найден." };
+  try {
+    await grantClientAssignment(supabase, {
+      organizationId: client.organization_id,
+      clientId,
+      email,
+      accessRole,
+    });
+  } catch (err) {
+    return { error: messageFor(err, "Не удалось назначить доступ.") };
+  }
 
-  const supabase = await createClient();
-  const { error } = await supabase.rpc("grant_client_assignment", {
-    p_org_id: orgId,
-    p_client_id: clientId,
-    p_user_id: target.id,
-    p_access_role: role,
-  });
-  if (error) return { error: error.message };
-
+  revalidatePath(`/clients/${clientId}/access`);
   revalidatePath("/access");
   return { error: null };
 }
@@ -63,19 +80,22 @@ export async function revokeAssignment(
   const clientId = String(formData.get("clientId") ?? "").trim();
   const userId = String(formData.get("userId") ?? "").trim();
 
-  if (!clientId || !userId) return { error: "Укажите client_id и user_id." };
+  if (!clientId || !userId) return { error: "Клиент или участник не указан." };
 
-  const orgId = await currentOrgId();
-  if (!orgId) return { error: "Организация не найдена." };
+  const { supabase, client } = await loadClient(clientId);
+  if (!client) return { error: DENIED };
 
-  const supabase = await createClient();
-  const { error } = await supabase.rpc("revoke_client_assignment", {
-    p_org_id: orgId,
-    p_client_id: clientId,
-    p_user_id: userId,
-  });
-  if (error) return { error: error.message };
+  try {
+    await revokeClientAssignment(supabase, {
+      organizationId: client.organization_id,
+      clientId,
+      userId,
+    });
+  } catch (err) {
+    return { error: messageFor(err, "Не удалось отозвать доступ.") };
+  }
 
+  revalidatePath(`/clients/${clientId}/access`);
   revalidatePath("/access");
   return { error: null };
 }

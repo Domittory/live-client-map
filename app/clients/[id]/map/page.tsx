@@ -1,8 +1,7 @@
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
-import { getClient } from "@/lib/service/clients";
 import { getLivingMap, type GraphNode, type GraphNodeType } from "@/lib/service/living-map";
+import { requireClientWorkspace } from "../workspace";
+import { ClientWorkspaceHeader } from "../workspace-nav";
 
 const TYPE_LABEL: Record<GraphNodeType, string> = {
   core_node: "Узел",
@@ -27,14 +26,7 @@ export default async function LivingMapPage({
   const { id } = await params;
   const sp = await searchParams;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
-
-  const client = await getClient(supabase, id);
-  if (!client) notFound();
+  const { supabase, client, access } = await requireClientWorkspace(id);
 
   const hideAiOnly = first(sp?.hideAiOnly) === "true" || first(sp?.hideAiOnly) === "1";
   const lifeArea = first(sp?.lifeArea);
@@ -53,7 +45,8 @@ export default async function LivingMapPage({
 
   return (
     <main className="shell">
-      <h1>Живая карта — {client.display_name ?? client.first_name ?? "Клиент"}</h1>
+      <ClientWorkspaceHeader client={client} access={access} current="map" />
+      <h2>Живая карта — {client.display_name ?? client.first_name ?? "Клиент"}</h2>
       <p>
         <Link href={`/clients/${id}`}>← Обзор клиента</Link>
       </p>
