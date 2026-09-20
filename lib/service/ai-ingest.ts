@@ -1,8 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { runAiFunction } from "@/lib/ai/gateway";
 import type { AiProvider } from "@/lib/ai/provider";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 
 export interface IngestSignalsInput {
   organizationId: string;
@@ -55,20 +55,16 @@ export async function ingestSignals(
   }
 
   const signals = (result.result?.signals ?? []) as AiSignal[];
-  const {
-    data: { user },
-  } = await client.auth.getUser();
-
-  const createdIds: string[] = [];
-  for (const signal of signals) {
-    const { data, error } = await client
-      .from("signals")
-      .insert({
-        organization_id: input.organizationId,
-        client_id: input.clientId,
-        diagnostic_session_id: input.diagnosticSessionId,
-        source_type: "ai_hypothesis",
-        epistemic_type: "hypothesis",
+  // Every pending L0 Signal and the audit row commit together (ticket 05): a
+  // half-ingested AI result can never become evidence.
+  return runAtomicRpc<string[]>(
+    client,
+    "ingest_signals",
+    {
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_session_id: input.diagnosticSessionId,
+      p_signals: signals.map((signal) => ({
         raw_statement: signal.raw_statement,
         statement_polarity: signal.statement_polarity,
         test_result: signal.test_result,
@@ -77,23 +73,12 @@ export async function ingestSignals(
         confidence: signal.confidence,
         life_areas: signal.life_areas,
         tags: signal.tags,
-        evidence_level: "L0_AI_ONLY",
-        review_status: "pending",
-        created_by: user?.id ?? null,
-      })
-      .select("id")
-      .single();
-    if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to persist AI signal");
-    createdIds.push(data.id);
-  }
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "diagnostic_session",
-    entityId: input.diagnosticSessionId,
-    action: "ai.ingest_signals",
-    after: { created_signals: createdIds.length },
-  });
-
-  return createdIds;
+      })),
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to persist AI signal",
+      validation: "Invalid AI signal",
+    }
+  );
 }

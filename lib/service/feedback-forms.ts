@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /**
@@ -74,42 +74,30 @@ async function getForm(client: SupabaseClient, formId: string): Promise<FormRow>
   return data as FormRow;
 }
 
+/** The draft form and its audit row are one atomic RPC (ticket 05). */
 export async function createFeedbackForm(
   client: SupabaseClient,
   rawInput: unknown
 ): Promise<string> {
   const input = validate(createFeedbackFormSchema, rawInput);
-  const {
-    data: { user },
-  } = await client.auth.getUser();
 
-  const { data, error } = await client
-    .from("client_feedback_forms")
-    .insert({
-      organization_id: input.organizationId,
-      client_id: input.clientId,
-      correction_id: input.correctionId ?? null,
-      follow_up_id: input.followUpId ?? null,
-      created_by: user?.id ?? null,
-      title: input.title,
-      questions: input.questions,
-    })
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No access to manage this client's forms");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create feedback form");
-  }
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "client_feedback_form",
-    entityId: data.id,
-    action: "feedback_form.create",
-    after: { title: input.title },
-  });
-  return data.id;
+  return runAtomicRpc<string>(
+    client,
+    "create_feedback_form",
+    {
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_title: input.title,
+      p_questions: input.questions,
+      p_correction_id: input.correctionId ?? null,
+      p_follow_up_id: input.followUpId ?? null,
+    },
+    {
+      forbidden: "No access to manage this client's forms",
+      failure: "Failed to create feedback form",
+      validation: "Invalid feedback form",
+    }
+  );
 }
 
 export async function sendFeedbackForm(client: SupabaseClient, rawInput: unknown): Promise<void> {
@@ -148,41 +136,20 @@ export async function submitFeedbackForm(
     }
   }
 
-  const {
-    data: { user },
-  } = await client.auth.getUser();
-
-  const { error: updateError } = await client
-    .from("client_feedback_forms")
-    .update({ answers: input.answers, status: "completed", completed_at: new Date().toISOString() })
-    .eq("id", input.formId);
-  if (updateError) throw new ServiceError("INTERNAL_ERROR", "Failed to submit feedback form");
-
-  // Submission becomes a pending Signal — never a confirmed model change.
-  const { data: signal, error: signalError } = await client
-    .from("signals")
-    .insert({
-      organization_id: form.organization_id,
-      client_id: form.client_id,
-      source_type: "follow_up",
-      epistemic_type: "self_report",
-      raw_statement: JSON.stringify(input.answers),
-      review_status: "pending",
-      context: { feedback_form_id: input.formId },
-      created_by: user?.id ?? null,
-    })
-    .select("id")
-    .single();
-  if (signalError) throw new ServiceError("INTERNAL_ERROR", "Failed to persist feedback signal");
-
-  await recordAudit(client, {
-    organizationId: form.organization_id,
-    entityType: "client_feedback_form",
-    entityId: input.formId,
-    action: "feedback_form.submit",
-    after: { signal_id: signal.id },
-  });
-  return signal.id;
+  // Completing the form, creating the pending Signal and writing the audit row
+  // happen in one transaction (ticket 05). The authoritative status/expiry check
+  // lives inside the RPC, so a concurrent submission cannot double-complete.
+  return runAtomicRpc<string>(
+    client,
+    "submit_feedback_form",
+    { p_form_id: input.formId, p_answers: input.answers },
+    {
+      forbidden: "Not allowed to submit this form",
+      failure: "Failed to submit feedback form",
+      conflict: "Form is not open for submission",
+      validation: "Form is not open for submission",
+    }
+  );
 }
 
 export async function listFeedbackForms(

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 export const SESSION_TYPES = [
@@ -67,90 +67,75 @@ export const createSignalSchema = z
   })
   .strict();
 
+/**
+ * Session creation and its audit row are one atomic RPC (ticket 05). An optional
+ * batch of signals can be created in the same transaction, so a session is never
+ * persisted without the evidence its caller asked for.
+ */
 export async function createSession(
   client: SupabaseClient,
   organizationId: string,
   rawInput: unknown
 ): Promise<string> {
   const input = validate(createSessionSchema, rawInput);
-  const {
-    data: { user },
-  } = await client.auth.getUser();
 
-  const { data, error } = await client
-    .from("diagnostic_sessions")
-    .insert({
-      organization_id: organizationId,
-      client_id: input.clientId,
-      title: input.title,
-      session_type: input.sessionType,
-      raw_input: input.rawInput ?? null,
-      input_format: input.inputFormat ?? null,
-      notes: input.notes ?? null,
-      performed_by_user_id: user?.id ?? null,
-    })
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create diagnostic session");
-  }
-  await recordAudit(client, {
-    organizationId,
-    entityType: "diagnostic_session",
-    entityId: data.id,
-    action: "session.created",
-    after: { title: input.title, session_type: input.sessionType },
-  });
-  return data.id;
+  const result = await runAtomicRpc<{ session_id: string }>(
+    client,
+    "create_diagnostic_session",
+    {
+      p_org_id: organizationId,
+      p_client_id: input.clientId,
+      p_title: input.title,
+      p_session_type: input.sessionType,
+      p_source_type: null,
+      p_raw_input: input.rawInput ?? null,
+      p_input_format: input.inputFormat ?? null,
+      p_notes: input.notes ?? null,
+      p_signals: [],
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to create diagnostic session",
+      validation: "Invalid diagnostic session",
+    }
+  );
+
+  return result.session_id;
 }
 
+/** Manual Signal and its audit row are one atomic RPC (ticket 05). */
 export async function createSignal(
   client: SupabaseClient,
   organizationId: string,
   rawInput: unknown
 ): Promise<string> {
   const input = validate(createSignalSchema, rawInput);
-  const {
-    data: { user },
-  } = await client.auth.getUser();
 
-  const { data, error } = await client
-    .from("signals")
-    .insert({
-      organization_id: organizationId,
-      client_id: input.clientId,
-      diagnostic_session_id: input.diagnosticSessionId ?? null,
-      source_type: input.sourceType,
-      epistemic_type: input.epistemicType,
-      raw_statement: input.rawStatement,
-      statement_polarity: input.statementPolarity ?? null,
-      test_result: input.testResult ?? null,
-      normalized_meaning: input.normalizedMeaning ?? null,
-      intensity: input.intensity ?? null,
-      confidence: input.confidence ?? null,
-      life_areas: input.lifeAreas ?? [],
-      tags: input.tags ?? [],
-      visibility: input.visibility ?? "internal",
-      review_status: "approved",
-      created_by: user?.id ?? null,
-    })
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create signal");
-  }
-  await recordAudit(client, {
-    organizationId,
-    entityType: "signal",
-    entityId: data.id,
-    action: "signal.created",
-    after: { source_type: input.sourceType, epistemic_type: input.epistemicType },
-  });
-  return data.id;
+  const signal = {
+    diagnostic_session_id: input.diagnosticSessionId ?? null,
+    source_type: input.sourceType,
+    epistemic_type: input.epistemicType,
+    raw_statement: input.rawStatement,
+    statement_polarity: input.statementPolarity ?? null,
+    test_result: input.testResult ?? null,
+    normalized_meaning: input.normalizedMeaning ?? null,
+    intensity: input.intensity ?? null,
+    confidence: input.confidence ?? null,
+    life_areas: input.lifeAreas ?? [],
+    tags: input.tags ?? [],
+    visibility: input.visibility ?? "internal",
+  };
+
+  return runAtomicRpc<string>(
+    client,
+    "create_signal",
+    { p_org_id: organizationId, p_client_id: input.clientId, p_signal: signal },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to create signal",
+      validation: "Invalid signal",
+    }
+  );
 }
 
 export async function listSignals(

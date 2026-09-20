@@ -71,6 +71,10 @@ begin
     'organizations',
     'organization_members',
     'organization_invitations',
+    'diagnostic_sessions',
+    'signals',
+    'imports',
+    'client_feedback_forms',
     'audit_log'
   ]
   loop

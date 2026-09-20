@@ -9,9 +9,9 @@ import {
   testResultSchema,
 } from "@/lib/ai/contracts";
 import { ingestSignals } from "./ai-ingest";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
 import { incrementCounter } from "@/lib/telemetry";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /**
@@ -144,23 +144,36 @@ export async function importText(
     return toReport(existing);
   }
 
-  const sessionId = await createSession(client, input.organizationId, input.clientId, {
-    inputFormat: input.inputFormat,
-    title: input.title ?? null,
-    rawInput: input.content,
-  });
-  const importId = await insertImport(client, {
-    organizationId: input.organizationId,
-    clientId: input.clientId,
-    sessionId,
-    inputFormat: input.inputFormat,
-    contractVersion: IMPORT_CONTRACT,
-    idempotencyKey: input.idempotencyKey,
-    contentSha,
-    status: "parsing",
-  });
+  // Session + import staging row are created in one transaction (ticket 05).
+  const started = await runAtomicRpc<ImportRpcResult>(
+    client,
+    "begin_import",
+    {
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_session_id: crypto.randomUUID(),
+      p_input_format: input.inputFormat,
+      p_contract_version: IMPORT_CONTRACT,
+      p_idempotency_key: input.idempotencyKey,
+      p_content_sha256: contentSha,
+      p_title: input.title ?? null,
+      p_raw_content: input.content,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to create import record",
+      conflict: "conflicting_idempotency_key",
+      validation: "conflicting_idempotency_key",
+    }
+  );
 
-  // AI parse → pending L0 candidates (never confirmed evidence).
+  // A concurrent request with the same operation key already staged this import.
+  if (started.reused) return toRpcReport(started);
+
+  const sessionId = started.session_id as string;
+
+  // AI parse → pending L0 candidates (never confirmed evidence). The batch and
+  // its audit row are one transaction.
   const signalIds = await ingestSignals(client, provider, {
     organizationId: input.organizationId,
     clientId: input.clientId,
@@ -171,21 +184,34 @@ export async function importText(
     knownLifeAreas: [],
   });
 
-  const report = await finalizeImport(
+  const finalized = await runAtomicRpc<ImportRpcResult>(
     client,
-    input.organizationId,
-    importId,
-    sessionId,
-    input.inputFormat,
-    contentSha,
+    "finalize_import",
     {
-      total: signalIds.length,
-      valid: signalIds.length,
-      accepted: 0,
-      committed: 0,
+      p_org_id: input.organizationId,
+      p_import_id: started.import_id,
+      p_counts: {
+        total: signalIds.length,
+        valid: signalIds.length,
+        invalid: 0,
+        duplicate: 0,
+        warning: 0,
+        accepted: 0,
+        rejected_by_reviewer: 0,
+        committed: 0,
+      },
+      p_report: { records: [] },
+      p_fatal_errors: [],
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to finalize import",
+      validation: "Import not found",
     }
   );
-  return report;
+
+  incrementCounter("import_total", "Total imports by outcome", { outcome: "parsed" });
+  return toRpcReport(finalized, contentSha);
 }
 
 export async function importSignalsCsv(
@@ -357,104 +383,30 @@ function toReport(row: ExistingImport): ImportReport {
   };
 }
 
-async function createSession(
-  client: SupabaseClient,
-  organizationId: string,
-  clientId: string,
-  input: { inputFormat: string; title: string | null; rawInput: string }
-): Promise<string> {
-  const { data, error } = await client
-    .from("diagnostic_sessions")
-    .insert({
-      organization_id: organizationId,
-      client_id: clientId,
-      title: input.title ?? "Import",
-      session_type: "import",
-      source_type: "imported_note",
-      raw_input: input.rawInput,
-      input_format: input.inputFormat,
-    })
-    .select("id")
-    .single();
-  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to create import session");
-  return data.id;
+/** Shape returned by begin_import / commit_import / finalize_import (ticket 05). */
+interface ImportRpcResult {
+  import_id: string;
+  session_id: string | null;
+  status: string;
+  counts: Record<string, number>;
+  report: { records?: unknown[] };
+  fatal_errors: unknown[];
+  signal_ids?: string[];
+  reused?: boolean;
 }
 
-async function insertImport(
-  client: SupabaseClient,
-  input: {
-    organizationId: string;
-    clientId: string;
-    sessionId: string;
-    inputFormat: string;
-    contractVersion: string;
-    idempotencyKey: string;
-    contentSha: string;
-    status: string;
-  }
-): Promise<string> {
-  const { data, error } = await client
-    .from("imports")
-    .insert({
-      organization_id: input.organizationId,
-      client_id: input.clientId,
-      diagnostic_session_id: input.sessionId,
-      input_format: input.inputFormat,
-      contract_version: input.contractVersion,
-      idempotency_key: input.idempotencyKey,
-      content_sha256: input.contentSha,
-      status: input.status,
-    })
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "23505") throw new ServiceError("CONFLICT", "conflicting_idempotency_key");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create import record");
-  }
-  return data.id;
-}
-
-async function finalizeImport(
-  client: SupabaseClient,
-  organizationId: string,
-  importId: string,
-  sessionId: string,
-  inputFormat: string,
-  contentSha: string,
-  counts: Record<string, number>
-): Promise<ImportReport> {
-  const fullCounts = {
-    total: counts.total ?? 0,
-    valid: counts.valid ?? 0,
-    invalid: 0,
-    duplicate: 0,
-    warning: 0,
-    accepted: counts.accepted ?? 0,
-    rejected_by_reviewer: 0,
-    committed: counts.committed ?? 0,
-  };
-  await client
-    .from("imports")
-    .update({ status: "awaiting_review", counts: fullCounts })
-    .eq("id", importId);
-  await recordAudit(client, {
-    organizationId,
-    entityType: "import",
-    entityId: importId,
-    action: "import.parsed",
-    after: { input_format: inputFormat },
-  });
-  incrementCounter("import_total", "Total imports by outcome", { outcome: "parsed" });
+/** Map an atomic import RPC result onto the public import report contract. */
+function toRpcReport(result: ImportRpcResult, contentSha?: string): ImportReport {
   return {
     contract: "live-client-map.import-report",
     version: "1.0",
-    import_id: importId,
-    diagnostic_session_id: sessionId,
-    content_sha256: contentSha,
-    status: "awaiting_review",
-    counts: fullCounts,
-    records: [],
-    fatal_errors: [],
+    import_id: result.import_id,
+    diagnostic_session_id: result.session_id ?? "",
+    content_sha256: contentSha ?? "",
+    status: result.status,
+    counts: result.counts ?? {},
+    records: (result.report?.records ?? []) as unknown[],
+    fatal_errors: result.fatal_errors ?? [],
   };
 }
 
@@ -781,115 +733,95 @@ async function commitStructured(
     records: StructuredRowResult[];
   }
 ): Promise<ImportReport> {
-  const sessionId = await createSession(client, organizationId, clientId, {
-    inputFormat: input.inputFormat,
-    title: input.title,
-    rawInput: input.rawContent,
-  });
-  const importId = await insertImport(client, {
-    organizationId,
-    clientId,
-    sessionId,
-    inputFormat: input.inputFormat,
-    contractVersion:
-      input.inputFormat === "signals_csv" ? SIGNALS_CSV_CONTRACT : SIGNALS_JSON_CONTRACT,
-    idempotencyKey: input.idempotencyKey,
-    contentSha: input.contentSha,
-    status: "parsing",
-  });
-
-  const {
-    data: { user },
-  } = await client.auth.getUser();
+  // Idempotent replay: the same operation key returns the stored report without
+  // writing anything. The RPC re-checks this inside its transaction as well.
+  const existing = await findImport(client, organizationId, clientId, input.idempotencyKey);
+  if (existing) {
+    if (existing.content_sha256 !== input.contentSha) {
+      throw new ServiceError("CONFLICT", "conflicting_idempotency_key");
+    }
+    return toReport(existing);
+  }
 
   let valid = 0;
   let invalid = 0;
   let duplicate = 0;
-  let committed = 0;
 
   for (const row of input.records) {
     if (row.status === "invalid") invalid += 1;
     else if (row.status === "duplicate") duplicate += 1;
-    else if (row.record) {
-      valid += 1;
-      const { data, error } = await client
-        .from("signals")
-        .insert({
-          organization_id: organizationId,
-          client_id: clientId,
-          diagnostic_session_id: sessionId,
-          source_type: row.record.source_type,
-          epistemic_type: row.record.epistemic_type,
-          raw_statement: row.record.raw_statement,
-          statement_polarity: row.record.statement_polarity,
-          test_result: row.record.test_result,
-          normalized_meaning: row.record.normalized_meaning,
-          inferred_opposite: row.record.inferred_opposite,
-          intensity: row.record.intensity,
-          confidence: row.record.confidence,
-          life_areas: row.record.life_areas,
-          tags: row.record.tags,
-          context: row.record.context ?? undefined,
-          time_scope: row.record.time_scope,
-          visibility: row.record.visibility,
-          review_status: "pending",
-          created_by: user?.id ?? null,
-        })
-        .select("id")
-        .single();
-      if (error) {
-        row.status = "invalid";
-        row.errors.push({ code: "commit_failed", field: null, message: "failed to persist" });
-        invalid += 1;
-        valid -= 1;
-      } else {
-        row.signal_id = data.id;
-        committed += 1;
-      }
-    }
+    else if (row.record) valid += 1;
   }
 
-  const counts = {
-    total: input.records.length,
-    valid,
-    invalid,
-    duplicate,
-    warning: 0,
-    accepted: 0,
-    rejected_by_reviewer: 0,
-    committed,
-  };
-  const reportRecords = input.records.map((r) => ({
-    index: r.index,
-    external_id: r.external_id,
-    status: r.status,
-    signal_id: r.signal_id,
-    errors: r.errors,
+  // Signals are submitted with the position of the report record they belong to,
+  // so the RPC can store the generated signal id inside the same transaction.
+  const signals: Record<string, unknown>[] = [];
+  input.records.forEach((row, position) => {
+    if (row.status === "invalid" || row.status === "duplicate" || !row.record) return;
+    signals.push({
+      record_position: position,
+      source_type: row.record.source_type,
+      epistemic_type: row.record.epistemic_type,
+      raw_statement: row.record.raw_statement,
+      statement_polarity: row.record.statement_polarity,
+      test_result: row.record.test_result,
+      normalized_meaning: row.record.normalized_meaning,
+      inferred_opposite: row.record.inferred_opposite,
+      intensity: row.record.intensity,
+      confidence: row.record.confidence,
+      life_areas: row.record.life_areas,
+      tags: row.record.tags,
+      context: row.record.context ?? {},
+      time_scope: row.record.time_scope,
+      visibility: row.record.visibility,
+      review_status: "pending",
+    });
+  });
+
+  const reportRecords = input.records.map((row) => ({
+    index: row.index,
+    external_id: row.external_id,
+    status: row.status,
+    signal_id: row.signal_id,
+    errors: row.errors,
   }));
 
-  await client
-    .from("imports")
-    .update({ status: "awaiting_review", counts, report: { records: reportRecords } })
-    .eq("id", importId);
+  const result = await runAtomicRpc<ImportRpcResult>(
+    client,
+    "commit_import",
+    {
+      p_org_id: organizationId,
+      p_client_id: clientId,
+      p_session_id: crypto.randomUUID(),
+      p_input_format: input.inputFormat,
+      p_contract_version:
+        input.inputFormat === "signals_csv" ? SIGNALS_CSV_CONTRACT : SIGNALS_JSON_CONTRACT,
+      p_idempotency_key: input.idempotencyKey,
+      p_content_sha256: input.contentSha,
+      p_title: input.title,
+      p_raw_content: input.rawContent,
+      p_counts: {
+        total: input.records.length,
+        valid,
+        invalid,
+        duplicate,
+        warning: 0,
+        accepted: 0,
+        rejected_by_reviewer: 0,
+        committed: 0,
+      },
+      p_report: { records: reportRecords },
+      p_fatal_errors: [],
+      p_signals: signals,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to commit import",
+      conflict: "conflicting_idempotency_key",
+      validation: "conflicting_idempotency_key",
+    }
+  );
 
-  await recordAudit(client, {
-    organizationId,
-    entityType: "import",
-    entityId: importId,
-    action: "import.parsed",
-    after: { input_format: input.inputFormat, committed },
-  });
   incrementCounter("import_total", "Total imports by outcome", { outcome: "parsed" });
-
-  return {
-    contract: "live-client-map.import-report",
-    version: "1.0",
-    import_id: importId,
-    diagnostic_session_id: sessionId,
-    content_sha256: input.contentSha,
-    status: "awaiting_review",
-    counts,
-    records: reportRecords,
-    fatal_errors: [],
-  };
+  return toRpcReport(result, input.contentSha);
 }

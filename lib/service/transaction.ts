@@ -52,7 +52,7 @@ export async function runAtomicRpc<T>(
     if (error.code === "22023" || error.code === "23514") {
       throw new ServiceError("VALIDATION_ERROR", messages.validation ?? messages.failure);
     }
-    if (error.code === "23505") {
+    if (error.code === "23505" || error.code === "55000") {
       throw new ServiceError("CONFLICT", messages.conflict ?? messages.failure);
     }
     throw new ServiceError("INTERNAL_ERROR", messages.failure);
