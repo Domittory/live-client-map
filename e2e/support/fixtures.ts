@@ -93,6 +93,24 @@ export class WorkspaceFixture {
     return client;
   }
 
+  /**
+   * Service-role client for asserting browser-to-database persistence and for
+   * seeding states the UI cannot create itself (e.g. an AI-only pending
+   * Signal). RLS is bypassed here on purpose: it is the test's observation
+   * channel, never a path the application code may use for user-facing reads.
+   */
+  serviceRoleClient(): SupabaseClient {
+    return this.admin;
+  }
+
+  /**
+   * Agent client bound to one user session, used to prove that the database —
+   * not the UI — denies an unassigned or read-only user.
+   */
+  userClient(user: TestUser): Promise<SupabaseClient> {
+    return this.signIn(user);
+  }
+
   /** Owner creates an organization and its first client through the product RPCs. */
   async createWorkspace(displayName = "E2E клиент"): Promise<TestWorkspace> {
     const owner = await this.createUser("owner");

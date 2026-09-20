@@ -78,3 +78,66 @@ button {
   gap: 0.5rem;
   margin: 0.25rem 0;
 }
+
+/* Client diagnostics screen (ticket 10). */
+.signal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  font-size: 0.85rem;
+  color: #424242;
+}
+
+.signal-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 1rem;
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+}
+
+.signal-fields dt {
+  color: #616161;
+}
+
+.signal-fields dd {
+  margin: 0;
+}
+
+.signal-interpretation {
+  margin: 0.5rem 0;
+}
+
+.review-form {
+  border-top: 1px solid #e0e0e0;
+  padding-top: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+[data-testid="diagnostic-session"] {
+  border: 1px solid #e0e0e0;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  list-style: none;
+}
+
+[data-testid="signal-row"] {
+  border: 1px solid #eeeeee;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+textarea {
+  padding: 0.5rem;
+  font: inherit;
+}
+
+select {
+  padding: 0.4rem;
+  font: inherit;
+}

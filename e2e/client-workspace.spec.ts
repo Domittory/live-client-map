@@ -49,7 +49,8 @@ test.describe("client workspace and access management", () => {
 
     await nav.getByRole("link", { name: "Диагностика", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/clients/${clientId}/diagnostics$`));
-    await expect(page.getByTestId("client-section-placeholder")).toBeVisible();
+    // Diagnostics is a real screen since ticket 10 (no placeholder).
+    await expect(page.getByRole("heading", { name: "Диагностические сессии" })).toBeVisible();
 
     await workspaceNav(page).getByRole("link", { name: "Ресурсы", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/clients/${clientId}/resources$`));

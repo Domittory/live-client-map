@@ -152,3 +152,138 @@ export async function listSignals(
   if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to list signals");
   return (data ?? []) as unknown[];
 }
+
+/**
+ * Client-scoped diagnostics read model (ticket 10).
+ *
+ * Sessions and their Signals are read through the RLS-scoped client: an
+ * unassigned user receives empty collections instead of a permission error, so
+ * the page can never mistake a denial for "no data" or leak another tenant's
+ * client id. Lineage is resolved from the embedded session reference, never
+ * from a client-side lookup table.
+ */
+
+export const DIAGNOSTICS_READ_LIMIT = 200;
+
+export interface DiagnosticSessionRecord {
+  id: string;
+  title: string;
+  session_type: string;
+  raw_input: string | null;
+  notes: string | null;
+  human_review_status: string;
+  ai_processing_status: string;
+  performed_at: string | null;
+  created_at: string;
+}
+
+export interface DiagnosticSignalRecord {
+  id: string;
+  diagnostic_session_id: string | null;
+  source_type: string;
+  epistemic_type: string;
+  raw_statement: string;
+  statement_polarity: string | null;
+  test_result: string | null;
+  normalized_meaning: string | null;
+  intensity: number | null;
+  confidence: number | null;
+  life_areas: string[];
+  tags: string[];
+  evidence_level: string;
+  visibility: string;
+  review_status: string;
+  source_ref_id: string | null;
+  created_at: string;
+}
+
+/** A Signal together with the session it was recorded in (lineage). */
+export interface DiagnosticSignalWithLineage extends DiagnosticSignalRecord {
+  session: { id: string; title: string; sessionType: string } | null;
+}
+
+/** One DiagnosticSession with the Signals that reference it. */
+export interface DiagnosticSessionWithSignals extends DiagnosticSessionRecord {
+  signals: DiagnosticSignalRecord[];
+}
+
+export interface DiagnosticsReadModel {
+  sessions: DiagnosticSessionWithSignals[];
+  /** Signals that belong to no session; they are still client evidence. */
+  sessionlessSignals: DiagnosticSignalRecord[];
+  /** Lineage for every signal of the client, keyed by signal id. */
+  lineage: Map<string, DiagnosticSignalWithLineage["session"]>;
+}
+
+const SESSION_COLUMNS =
+  "id, title, session_type, raw_input, notes, human_review_status, ai_processing_status, performed_at, created_at";
+
+const SIGNAL_COLUMNS =
+  "id, diagnostic_session_id, source_type, epistemic_type, raw_statement, statement_polarity, " +
+  "test_result, normalized_meaning, intensity, confidence, life_areas, tags, evidence_level, " +
+  "visibility, review_status, source_ref_id, created_at";
+
+/**
+ * Load the whole diagnostics read model of one client. Sessions and Signals are
+ * fetched through RLS-protected tables, so the read is authorized by the
+ * database and the caller's organization scope.
+ */
+export async function getDiagnosticsReadModel(
+  client: SupabaseClient,
+  input: { organizationId: string; clientId: string }
+): Promise<DiagnosticsReadModel> {
+  const organizationId = validate(uuid, input.organizationId);
+  const clientId = validate(uuid, input.clientId);
+
+  const [sessionsResult, signalsResult] = await Promise.all([
+    client
+      .from("diagnostic_sessions")
+      .select(SESSION_COLUMNS)
+      .eq("organization_id", organizationId)
+      .eq("client_id", clientId)
+      .order("created_at", { ascending: false })
+      .limit(DIAGNOSTICS_READ_LIMIT),
+    client
+      .from("signals")
+      .select(SIGNAL_COLUMNS)
+      .eq("organization_id", organizationId)
+      .eq("client_id", clientId)
+      .order("created_at", { ascending: false })
+      .limit(DIAGNOSTICS_READ_LIMIT),
+  ]);
+
+  if (sessionsResult.error || signalsResult.error) {
+    throw new ServiceError("INTERNAL_ERROR", "Failed to read diagnostics");
+  }
+
+  const sessions = (sessionsResult.data ?? []) as unknown as DiagnosticSessionRecord[];
+  const signals = (signalsResult.data ?? []) as unknown as DiagnosticSignalRecord[];
+
+  const lineage = new Map<string, DiagnosticSignalWithLineage["session"]>();
+  const bySession = new Map<string, DiagnosticSignalRecord[]>();
+  const knownSessions = new Map(sessions.map((session) => [session.id, session]));
+
+  for (const signal of signals) {
+    const session = signal.diagnostic_session_id
+      ? knownSessions.get(signal.diagnostic_session_id)
+      : undefined;
+    lineage.set(
+      signal.id,
+      session ? { id: session.id, title: session.title, sessionType: session.session_type } : null
+    );
+    if (session) {
+      const bucket = bySession.get(session.id) ?? [];
+      bucket.push(signal);
+      bySession.set(session.id, bucket);
+    }
+  }
+
+  return {
+    sessions: sessions.map((session) => ({
+      ...session,
+      signals: bySession.get(session.id) ?? [],
+    })),
+    sessionlessSignals: signals.filter((signal) => lineage.get(signal.id) === null),
+    lineage,
+  };
+}
