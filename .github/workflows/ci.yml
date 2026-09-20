@@ -34,6 +34,9 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Unsafe audit-write guard
+        run: pnpm audit:writes
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -75,6 +78,19 @@ jobs:
 
       - name: Start local Supabase
         run: supabase start
+
+      # `supabase start` only applies migrations. The seed additionally creates
+      # the local-only `test_support` fault-injection schema, without which every
+      # atomic-rollback test silently skips — so the database is rebuilt from
+      # migrations + seed before the suite runs.
+      - name: Apply migrations and seed
+        run: supabase db reset
+
+      - name: Generated DB types are current
+        run: pnpm db:types:check
+
+      - name: RPC permissions and search paths
+        run: pnpm audit:rpc-permissions
 
       - name: Run integration tests
         run: pnpm test:integration

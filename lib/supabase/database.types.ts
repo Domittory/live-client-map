@@ -696,6 +696,7 @@ export type Database = {
           gender: string | null
           id: string
           last_name: string | null
+          legal_hold: boolean
           occupation: string | null
           organization_id: string
           owner_user_id: string
@@ -718,6 +719,7 @@ export type Database = {
           gender?: string | null
           id?: string
           last_name?: string | null
+          legal_hold?: boolean
           occupation?: string | null
           organization_id: string
           owner_user_id: string
@@ -740,6 +742,7 @@ export type Database = {
           gender?: string | null
           id?: string
           last_name?: string | null
+          legal_hold?: boolean
           occupation?: string | null
           organization_id?: string
           owner_user_id?: string
@@ -1584,6 +1587,72 @@ export type Database = {
           },
         ]
       }
+      erasure_requests: {
+        Row: {
+          backup_marker: Json | null
+          blocked_reason: string | null
+          client_id: string | null
+          client_ref: string
+          completed_at: string | null
+          created_at: string
+          failed_at: string | null
+          id: string
+          impacted_counts: Json
+          organization_id: string
+          requested_at: string
+          requested_by: string
+          started_at: string | null
+          status: string
+        }
+        Insert: {
+          backup_marker?: Json | null
+          blocked_reason?: string | null
+          client_id?: string | null
+          client_ref: string
+          completed_at?: string | null
+          created_at?: string
+          failed_at?: string | null
+          id?: string
+          impacted_counts?: Json
+          organization_id: string
+          requested_at?: string
+          requested_by: string
+          started_at?: string | null
+          status?: string
+        }
+        Update: {
+          backup_marker?: Json | null
+          blocked_reason?: string | null
+          client_id?: string | null
+          client_ref?: string
+          completed_at?: string | null
+          created_at?: string
+          failed_at?: string | null
+          id?: string
+          impacted_counts?: Json
+          organization_id?: string
+          requested_at?: string
+          requested_by?: string
+          started_at?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "erasure_requests_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "erasure_requests_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       evidence_clusters: {
         Row: {
           client_id: string
@@ -1638,6 +1707,108 @@ export type Database = {
           },
           {
             foreignKeyName: "evidence_clusters_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      export_requests: {
+        Row: {
+          actor_user_id: string
+          artifact_bytes: number | null
+          artifact_filename: string | null
+          artifact_path: string | null
+          artifact_sha256: string | null
+          audience: Database["public"]["Enums"]["export_audience"]
+          client_id: string
+          completed_at: string | null
+          contract_version: string
+          denied_at: string | null
+          download_count: number
+          download_denied_count: number
+          expired_at: string | null
+          expires_at: string
+          failed_at: string | null
+          failure_code: string | null
+          format: Database["public"]["Enums"]["export_format"]
+          generated_at: string | null
+          id: string
+          idempotency_key: string
+          kind: Database["public"]["Enums"]["export_kind"]
+          last_downloaded_at: string | null
+          organization_id: string
+          requested_at: string
+          snapshot_version: number | null
+          status: Database["public"]["Enums"]["export_request_status"]
+        }
+        Insert: {
+          actor_user_id: string
+          artifact_bytes?: number | null
+          artifact_filename?: string | null
+          artifact_path?: string | null
+          artifact_sha256?: string | null
+          audience: Database["public"]["Enums"]["export_audience"]
+          client_id: string
+          completed_at?: string | null
+          contract_version: string
+          denied_at?: string | null
+          download_count?: number
+          download_denied_count?: number
+          expired_at?: string | null
+          expires_at?: string
+          failed_at?: string | null
+          failure_code?: string | null
+          format: Database["public"]["Enums"]["export_format"]
+          generated_at?: string | null
+          id?: string
+          idempotency_key: string
+          kind: Database["public"]["Enums"]["export_kind"]
+          last_downloaded_at?: string | null
+          organization_id: string
+          requested_at?: string
+          snapshot_version?: number | null
+          status?: Database["public"]["Enums"]["export_request_status"]
+        }
+        Update: {
+          actor_user_id?: string
+          artifact_bytes?: number | null
+          artifact_filename?: string | null
+          artifact_path?: string | null
+          artifact_sha256?: string | null
+          audience?: Database["public"]["Enums"]["export_audience"]
+          client_id?: string
+          completed_at?: string | null
+          contract_version?: string
+          denied_at?: string | null
+          download_count?: number
+          download_denied_count?: number
+          expired_at?: string | null
+          expires_at?: string
+          failed_at?: string | null
+          failure_code?: string | null
+          format?: Database["public"]["Enums"]["export_format"]
+          generated_at?: string | null
+          id?: string
+          idempotency_key?: string
+          kind?: Database["public"]["Enums"]["export_kind"]
+          last_downloaded_at?: string | null
+          organization_id?: string
+          requested_at?: string
+          snapshot_version?: number | null
+          status?: Database["public"]["Enums"]["export_request_status"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "export_requests_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "export_requests_organization_id_fkey"
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
@@ -3340,6 +3511,18 @@ export type Database = {
     }
     Functions: {
       accept_invitation: { Args: { p_token: string }; Returns: string }
+      add_hypothesis_contradiction: {
+        Args: {
+          p_evidence_ref: string
+          p_hypothesis_id: string
+          p_org_id: string
+        }
+        Returns: Json
+      }
+      anonymize_client_audit: {
+        Args: { p_client_id: string; p_entity_ids?: string[] }
+        Returns: number
+      }
       append_audit: {
         Args: {
           p_action: string
@@ -3354,6 +3537,167 @@ export type Database = {
         }
         Returns: string
       }
+      append_export_audit: {
+        Args: {
+          p_action: string
+          p_actor_user_id: string
+          p_after: Json
+          p_before: Json
+          p_client_id: string
+          p_org_id: string
+          p_reason: string
+        }
+        Returns: string
+      }
+      append_feedback_audit: {
+        Args: {
+          p_action: string
+          p_after: Json
+          p_before: Json
+          p_entity_id: string
+          p_entity_type: string
+          p_organization_id: string
+          p_reason: string
+        }
+        Returns: string
+      }
+      apply_ai_core_node_proposals: {
+        Args: { p_client_id: string; p_org_id: string; p_proposals: Json }
+        Returns: Json
+      }
+      apply_ai_resource_proposals: {
+        Args: { p_client_id: string; p_org_id: string; p_proposals: Json }
+        Returns: Json
+      }
+      apply_ai_theme_proposals: {
+        Args: { p_client_id: string; p_org_id: string; p_proposals: Json }
+        Returns: Json
+      }
+      archive_client: {
+        Args: { p_client_id: string; p_org_id: string }
+        Returns: undefined
+      }
+      archive_correction: {
+        Args: { p_correction_id: string }
+        Returns: undefined
+      }
+      archive_org_belief_template: {
+        Args: { p_template_id: string }
+        Returns: undefined
+      }
+      archive_org_domain: { Args: { p_domain_id: string }; Returns: undefined }
+      archive_org_method: { Args: { p_method_id: string }; Returns: undefined }
+      assert_client_consent: {
+        Args: { p_client_id: string; p_org_id: string; p_types: string[] }
+        Returns: string
+      }
+      assert_client_write: {
+        Args: { p_client_id: string; p_org_id: string }
+        Returns: string
+      }
+      assert_org_author_actor: {
+        Args: { p_organization_id: string }
+        Returns: string
+      }
+      begin_import: {
+        Args: {
+          p_client_id: string
+          p_content_sha256: string
+          p_contract_version: string
+          p_idempotency_key: string
+          p_input_format: string
+          p_org_id: string
+          p_raw_content: string
+          p_session_id: string
+          p_title: string
+        }
+        Returns: Json
+      }
+      cancel_follow_up: { Args: { p_follow_up_id: string }; Returns: Json }
+      change_goal_status: {
+        Args: { p_goal_id: string; p_org_id: string; p_to_status: string }
+        Returns: undefined
+      }
+      change_request_status: {
+        Args: { p_org_id: string; p_request_id: string; p_to_status: string }
+        Returns: undefined
+      }
+      claim_export_download: {
+        Args: { p_export_id: string }
+        Returns: {
+          claim_artifact_bytes: number
+          claim_artifact_filename: string
+          claim_artifact_path: string
+          claim_artifact_sha256: string
+          claim_audience: Database["public"]["Enums"]["export_audience"]
+          claim_client_id: string
+          claim_contract_version: string
+          claim_download_count: number
+          claim_expires_at: string
+          claim_export_id: string
+          claim_format: Database["public"]["Enums"]["export_format"]
+          claim_kind: Database["public"]["Enums"]["export_kind"]
+          claim_organization_id: string
+          outcome: string
+        }[]
+      }
+      commit_import: {
+        Args: {
+          p_client_id: string
+          p_content_sha256: string
+          p_contract_version: string
+          p_counts: Json
+          p_fatal_errors: Json
+          p_idempotency_key: string
+          p_input_format: string
+          p_org_id: string
+          p_raw_content: string
+          p_report: Json
+          p_session_id: string
+          p_signals: Json
+          p_title: string
+        }
+        Returns: Json
+      }
+      commit_import_selection: {
+        Args: {
+          p_client_id: string
+          p_import_id: string
+          p_org_id: string
+          p_selected: Json
+        }
+        Returns: Json
+      }
+      complete_export_request: {
+        Args: {
+          p_artifact_bytes: number
+          p_artifact_filename: string
+          p_artifact_path: string
+          p_artifact_sha256: string
+          p_export_id: string
+        }
+        Returns: undefined
+      }
+      complete_follow_up: {
+        Args: { p_follow_up_id: string; p_payload: Json }
+        Returns: Json
+      }
+      confirm_causal_relation: {
+        Args: { p_org_id: string; p_reason: string; p_relation_id: string }
+        Returns: undefined
+      }
+      create_ai_contradiction_relations: {
+        Args: { p_client_id: string; p_items: Json; p_org_id: string }
+        Returns: Json
+      }
+      create_ai_hypotheses: {
+        Args: { p_client_id: string; p_hypotheses: Json; p_org_id: string }
+        Returns: Json
+      }
+      create_behavioral_marker: {
+        Args: { p_client_id: string; p_org_id: string; p_payload: Json }
+        Returns: string
+      }
       create_client: {
         Args: {
           p_display_name: string
@@ -3363,7 +3707,292 @@ export type Database = {
         }
         Returns: string
       }
+      create_client_goal: {
+        Args: {
+          p_client_id: string
+          p_description: string
+          p_importance: string
+          p_org_id: string
+          p_target_state: string
+          p_title: string
+        }
+        Returns: string
+      }
+      create_client_request: {
+        Args: {
+          p_client_id: string
+          p_description: string
+          p_org_id: string
+          p_priority: string
+          p_success_criteria: string
+          p_title: string
+        }
+        Returns: string
+      }
+      create_core_node: {
+        Args: {
+          p_client_id: string
+          p_confidence_score: number
+          p_hypothesis: string
+          p_org_id: string
+          p_root_domain: string
+          p_title: string
+        }
+        Returns: string
+      }
+      create_core_node_reactivation: {
+        Args: {
+          p_client_id: string
+          p_core_node_id: string
+          p_org_id: string
+          p_payload: Json
+        }
+        Returns: Json
+      }
+      create_correction_from_recommendation: {
+        Args: { p_client_id: string; p_org_id: string; p_payload: Json }
+        Returns: string
+      }
+      create_development_target: {
+        Args: { p_client_id: string; p_org_id: string; p_payload: Json }
+        Returns: string
+      }
+      create_diagnostic_session: {
+        Args: {
+          p_client_id: string
+          p_input_format: string
+          p_notes: string
+          p_org_id: string
+          p_raw_input: string
+          p_session_type: string
+          p_signals: Json
+          p_source_type: string
+          p_title: string
+        }
+        Returns: Json
+      }
+      create_evidence_clusters: {
+        Args: {
+          p_client_id: string
+          p_clusters: Json
+          p_org_id: string
+          p_session_id: string
+        }
+        Returns: Json
+      }
+      create_feedback_form: {
+        Args: {
+          p_client_id: string
+          p_correction_id: string
+          p_follow_up_id: string
+          p_org_id: string
+          p_questions: Json
+          p_title: string
+        }
+        Returns: string
+      }
+      create_hypothesis: {
+        Args: {
+          p_client_id: string
+          p_confidence_score: number
+          p_description: string
+          p_org_id: string
+          p_title: string
+        }
+        Returns: string
+      }
+      create_life_event: {
+        Args: {
+          p_client_id: string
+          p_date: string
+          p_description: string
+          p_event_type: string
+          p_org_id: string
+          p_significance: string
+          p_source_type: string
+          p_title: string
+          p_visibility: string
+        }
+        Returns: string
+      }
+      create_observation: {
+        Args: { p_client_id: string; p_org_id: string; p_payload: Json }
+        Returns: Json
+      }
+      create_org_belief_template: {
+        Args: { p_org_id: string; p_payload: Json }
+        Returns: Json
+      }
+      create_org_domain: {
+        Args: { p_org_id: string; p_payload: Json }
+        Returns: Json
+      }
+      create_org_method: {
+        Args: { p_org_id: string; p_payload: Json }
+        Returns: Json
+      }
       create_organization: { Args: { org_name: string }; Returns: string }
+      create_portal_user: {
+        Args: { p_client_id: string; p_email: string }
+        Returns: string
+      }
+      create_purpose_profile: {
+        Args: { p_client_id: string; p_org_id: string; p_payload: Json }
+        Returns: string
+      }
+      create_purpose_synthesis: {
+        Args: { p_client_id: string; p_org_id: string; p_payload: Json }
+        Returns: string
+      }
+      create_recommendations: {
+        Args: { p_client_id: string; p_org_id: string; p_payload: Json }
+        Returns: Json
+      }
+      create_relation: {
+        Args: {
+          p_client_id: string
+          p_confidence: number
+          p_evidence_summary: string
+          p_from_core_node_id: string
+          p_org_id: string
+          p_relation_type: string
+          p_strength: number
+          p_to_core_node_id: string
+        }
+        Returns: string
+      }
+      create_relationship: {
+        Args: {
+          p_client_a_id: string
+          p_client_b_id: string
+          p_org_id: string
+          p_relationship_type: string
+        }
+        Returns: string
+      }
+      create_relationship_dynamic: {
+        Args: {
+          p_confidence_score: number
+          p_description: string
+          p_evidence_refs: string[]
+          p_org_id: string
+          p_relationship_id: string
+          p_title: string
+          p_visibility: string
+        }
+        Returns: string
+      }
+      create_resource: {
+        Args: {
+          p_client_id: string
+          p_confidence_score: number
+          p_description: string
+          p_domain: string
+          p_evidence_summary: string
+          p_name: string
+          p_org_id: string
+          p_strength_score: number
+        }
+        Returns: string
+      }
+      create_safety_review: {
+        Args: {
+          p_category: string
+          p_client_id: string
+          p_org_id: string
+          p_severity: string
+          p_source: string
+        }
+        Returns: string
+      }
+      create_signal: {
+        Args: { p_client_id: string; p_org_id: string; p_signal: Json }
+        Returns: string
+      }
+      create_snapshot: {
+        Args: {
+          p_client_id: string
+          p_org_id: string
+          p_payload: Json
+          p_reason: string
+        }
+        Returns: Json
+      }
+      create_theme: {
+        Args: {
+          p_client_id: string
+          p_description: string
+          p_domain: string
+          p_name: string
+          p_org_id: string
+        }
+        Returns: string
+      }
+      create_trigger: {
+        Args: {
+          p_client_id: string
+          p_description: string
+          p_intensity: number
+          p_life_event_id: string
+          p_occurred_at: string
+          p_org_id: string
+          p_source_type: string
+          p_title: string
+          p_visibility: string
+        }
+        Returns: string
+      }
+      erasure_impact_tables: { Args: never; Returns: string[] }
+      execute_client_erasure: { Args: { p_client_id: string }; Returns: Json }
+      expire_export_requests: {
+        Args: { p_limit?: number }
+        Returns: {
+          export_id: string
+          outcome: string
+        }[]
+      }
+      export_audience_allowed: {
+        Args: {
+          p_audience: Database["public"]["Enums"]["export_audience"]
+          p_client_id: string
+          p_org_id: string
+        }
+        Returns: boolean
+      }
+      export_contract_version: {
+        Args: {
+          p_format: Database["public"]["Enums"]["export_format"]
+          p_kind: Database["public"]["Enums"]["export_kind"]
+        }
+        Returns: string
+      }
+      export_format_for_kind: {
+        Args: { p_kind: Database["public"]["Enums"]["export_kind"] }
+        Returns: Database["public"]["Enums"]["export_format"]
+      }
+      export_relationship_consent_withdrawn: {
+        Args: { p_client_id: string }
+        Returns: boolean
+      }
+      fail_export_request: {
+        Args: { p_export_id: string; p_failure_code: string }
+        Returns: undefined
+      }
+      finalize_import: {
+        Args: {
+          p_counts: Json
+          p_fatal_errors: Json
+          p_import_id: string
+          p_org_id: string
+          p_report: Json
+        }
+        Returns: Json
+      }
+      get_client_portal_overview: { Args: never; Returns: Json }
+      goal_status_transition_allowed: {
+        Args: { p_from: string; p_to: string }
+        Returns: boolean
+      }
       grant_client_assignment: {
         Args: {
           p_access_role: string
@@ -3388,6 +4017,32 @@ export type Database = {
         Returns: boolean
       }
       health_check: { Args: never; Returns: boolean }
+      ingest_signals: {
+        Args: {
+          p_client_id: string
+          p_org_id: string
+          p_session_id: string
+          p_signals: Json
+        }
+        Returns: Json
+      }
+      insert_model_change_internal: {
+        Args: {
+          p_change_reason: string
+          p_client_id: string
+          p_entity_id: string
+          p_entity_type: string
+          p_evidence_refs: string[]
+          p_new_state: Json
+          p_org_id: string
+          p_previous_state: Json
+        }
+        Returns: string
+      }
+      insert_signal_row: {
+        Args: { p_client_id: string; p_org_id: string; p_signal: Json }
+        Returns: string
+      }
       invite_member: {
         Args: { p_email: string; p_org_id: string; p_role: string }
         Returns: string
@@ -3402,6 +4057,172 @@ export type Database = {
       }
       is_org_member: { Args: { org_id: string }; Returns: boolean }
       is_org_owner: { Args: { org_id: string }; Returns: boolean }
+      jsonb_object_ids: { Args: { p_value: Json }; Returns: string[] }
+      jsonb_text_array: { Args: { p_value: Json }; Returns: string[] }
+      link_theme_core_node: {
+        Args: {
+          p_confidence: number
+          p_core_node_id: string
+          p_link_rationale: string
+          p_org_id: string
+          p_relationship_type: string
+          p_theme_id: string
+        }
+        Returns: undefined
+      }
+      link_theme_signal: {
+        Args: {
+          p_link_rationale: string
+          p_org_id: string
+          p_relevance_score: number
+          p_signal_id: string
+          p_theme_id: string
+        }
+        Returns: undefined
+      }
+      list_client_assignments: {
+        Args: { p_client_id: string; p_org_id: string }
+        Returns: {
+          access_role: string
+          email: string
+          granted_at: string
+          user_id: string
+        }[]
+      }
+      list_client_portal_feedback_forms: { Args: never; Returns: Json }
+      opaque_client_ref: { Args: { p_client_id: string }; Returns: string }
+      opaque_export_ref: { Args: { p_export_id: string }; Returns: string }
+      p_payload_missing_required: {
+        Args: { p_assessment: Json }
+        Returns: boolean
+      }
+      portal_client_id: { Args: never; Returns: string }
+      purge_client_ai_runs: { Args: { p_client_id: string }; Returns: number }
+      recompute_theme_aggregates: {
+        Args: { p_theme_id: string }
+        Returns: undefined
+      }
+      recompute_theme_aggregates_internal: {
+        Args: { p_theme_id: string }
+        Returns: undefined
+      }
+      record_behavioral_marker_value: {
+        Args: { p_marker_id: string; p_note: string; p_value: number }
+        Returns: Json
+      }
+      record_export_download: {
+        Args: { p_bytes: number; p_export_id: string; p_sha256: string }
+        Returns: number
+      }
+      record_model_change: {
+        Args: {
+          p_change_reason: string
+          p_client_id: string
+          p_entity_id: string
+          p_entity_type: string
+          p_evidence_refs: Json
+          p_new_state: Json
+          p_org_id: string
+          p_previous_state: Json
+        }
+        Returns: Json
+      }
+      relationship_visible_evidence_refs: {
+        Args: {
+          p_client_a_id: string
+          p_client_b_id: string
+          p_org_id: string
+          p_refs: string[]
+        }
+        Returns: string[]
+      }
+      request_client_erasure: { Args: { p_client_id: string }; Returns: Json }
+      request_export: {
+        Args: {
+          p_audience: Database["public"]["Enums"]["export_audience"]
+          p_client_id: string
+          p_contract_version: string
+          p_format: Database["public"]["Enums"]["export_format"]
+          p_idempotency_key: string
+          p_kind: Database["public"]["Enums"]["export_kind"]
+          p_snapshot_version?: number
+        }
+        Returns: {
+          export_id: string
+          organization_id: string
+          state: Database["public"]["Enums"]["export_request_status"]
+        }[]
+      }
+      request_status_transition_allowed: {
+        Args: { p_from: string; p_to: string }
+        Returns: boolean
+      }
+      require_org_member_actor: {
+        Args: { p_organization_id: string }
+        Returns: string
+      }
+      require_org_owner_actor: {
+        Args: { p_organization_id: string }
+        Returns: string
+      }
+      review_core_node_reactivation: {
+        Args: {
+          p_decision: string
+          p_org_id: string
+          p_reactivation_id: string
+        }
+        Returns: Json
+      }
+      review_follow_up_assessment: {
+        Args: {
+          p_assessment: Json
+          p_decision: string
+          p_final_status: string
+          p_follow_up_id: string
+          p_model_change_reason: string
+        }
+        Returns: Json
+      }
+      review_hypothesis: {
+        Args: {
+          p_decision: string
+          p_hypothesis_id: string
+          p_org_id: string
+          p_reason: string
+        }
+        Returns: undefined
+      }
+      review_model_explanation: {
+        Args: { p_decision: string; p_explanation_id: string; p_org_id: string }
+        Returns: Json
+      }
+      review_recommendation: {
+        Args: {
+          p_decision: string
+          p_org_id: string
+          p_reason: string
+          p_recommendation_id: string
+        }
+        Returns: undefined
+      }
+      review_signal: {
+        Args: {
+          p_action: string
+          p_org_id: string
+          p_reason: string
+          p_signal_id: string
+        }
+        Returns: undefined
+      }
+      review_theme: {
+        Args: {
+          p_decision: string
+          p_org_id: string
+          p_reason: string
+          p_theme_id: string
+        }
+        Returns: undefined
+      }
       revoke_client_assignment: {
         Args: { p_client_id: string; p_org_id: string; p_user_id: string }
         Returns: undefined
@@ -3410,16 +4231,110 @@ export type Database = {
         Args: { p_client_id: string; p_consent_type: string; p_org_id: string }
         Returns: undefined
       }
+      revoke_portal_user: {
+        Args: { p_portal_user_id: string }
+        Returns: boolean
+      }
+      save_model_explanation: {
+        Args: {
+          p_action: string
+          p_client_id: string
+          p_org_id: string
+          p_payload: Json
+        }
+        Returns: Json
+      }
+      schedule_follow_up: {
+        Args: {
+          p_client_id: string
+          p_correction_id: string
+          p_org_id: string
+          p_scheduled_at: string
+        }
+        Returns: Json
+      }
+      set_client_legal_hold: {
+        Args: { p_client_id: string; p_hold: boolean }
+        Returns: Json
+      }
+      set_core_node_status: {
+        Args: {
+          p_mark_archived: boolean
+          p_mark_confirmed: boolean
+          p_node_id: string
+          p_org_id: string
+          p_status: string
+        }
+        Returns: undefined
+      }
+      set_follow_up_ai_assessment: {
+        Args: { p_action: string; p_assessment: Json; p_follow_up_id: string }
+        Returns: Json
+      }
       set_member_status: {
         Args: { p_org_id: string; p_status: string; p_user_id: string }
         Returns: undefined
+      }
+      set_recommendation_visibility: {
+        Args: {
+          p_org_id: string
+          p_reason: string
+          p_recommendation_id: string
+          p_visibility: string
+        }
+        Returns: undefined
+      }
+      submit_feedback_form: {
+        Args: { p_answers: Json; p_form_id: string }
+        Returns: string
       }
       transfer_ownership: {
         Args: { p_new_owner_id: string; p_org_id: string }
         Returns: undefined
       }
+      unlink_theme_signal: {
+        Args: { p_org_id: string; p_signal_id: string; p_theme_id: string }
+        Returns: undefined
+      }
+      update_behavioral_marker: {
+        Args: { p_marker_id: string; p_patch: Json }
+        Returns: Json
+      }
+      update_client: {
+        Args: { p_client_id: string; p_org_id: string; p_patch: Json }
+        Returns: undefined
+      }
+      update_correction: {
+        Args: { p_correction_id: string; p_patch: Json }
+        Returns: Json
+      }
+      update_development_target: {
+        Args: {
+          p_org_id: string
+          p_patch: Json
+          p_reason: string
+          p_target_id: string
+        }
+        Returns: undefined
+      }
       update_member_role: {
         Args: { p_org_id: string; p_role: string; p_user_id: string }
+        Returns: undefined
+      }
+      update_observation: {
+        Args: { p_observation_id: string; p_patch: Json }
+        Returns: Json
+      }
+      update_org_method: {
+        Args: { p_method_id: string; p_patch: Json }
+        Returns: Json
+      }
+      update_organization_settings: {
+        Args: { p_name: string; p_org_id: string; p_retention: Json }
+        Returns: undefined
+      }
+      update_resource: {
+        Args: { p_patch: Json; p_reason: string; p_resource_id: string }
         Returns: undefined
       }
       validate_behavioral_marker_link: {
@@ -3440,9 +4355,22 @@ export type Database = {
         }
         Returns: boolean
       }
+      validate_explanation_grounding: {
+        Args: { p_explanations: Json; p_grounding: Json }
+        Returns: string[]
+      }
     }
     Enums: {
-      [_ in never]: never
+      export_audience: "owner" | "specialist" | "supervisor" | "client"
+      export_format: "json" | "csv" | "markdown" | "pdf"
+      export_kind: "client_archive" | "signals_csv" | "supervision_export"
+      export_request_status:
+        | "requested"
+        | "generating"
+        | "available"
+        | "failed"
+        | "denied"
+        | "expired"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -3572,7 +4500,19 @@ export const Constants = {
     Enums: {},
   },
   public: {
-    Enums: {},
+    Enums: {
+      export_audience: ["owner", "specialist", "supervisor", "client"],
+      export_format: ["json", "csv", "markdown", "pdf"],
+      export_kind: ["client_archive", "signals_csv", "supervision_export"],
+      export_request_status: [
+        "requested",
+        "generating",
+        "available",
+        "failed",
+        "denied",
+        "expired",
+      ],
+    },
   },
 } as const
 

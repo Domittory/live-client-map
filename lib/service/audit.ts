@@ -69,21 +69,20 @@ export async function recordAudit(client: SupabaseClient, rawInput: unknown): Pr
 }
 
 /**
- * Reusable mutation wrapper (ticket 14, step 2): runs the mutation, then
- * appends the audit record with before/after, actor and reason. Downstream
- * services call this instead of hand-rolling audit inserts.
+ * `withAudit()` was retired by ticket 21. It existed to pair an already
+ * committed mutation with a later audit append, which is exactly the
+ * mutation-then-audit gap the atomic RPC contract removes: a failure between
+ * the two calls left business state without its audit row. Every compound
+ * mutation now appends its audit row inside the same SECURITY DEFINER RPC
+ * (migrations 0039–0053), so no caller needs this wrapper any more.
+ *
+ * `recordAudit()` survives only for the documented read-only paths on the
+ * allowlist in `scripts/check-unsafe-audit-writes.mjs`. That guard fails the
+ * build when a new call site is not on the list and when any call site writes
+ * domain state before appending its audit row.
+ *
+ * Owner audit viewer query contract (safe server-side filtering).
  */
-export async function withAudit<T>(
-  client: SupabaseClient,
-  entry: Omit<RecordAuditInput, "before" | "after"> & { before?: unknown; after?: unknown },
-  mutate: () => Promise<T>
-): Promise<T> {
-  const result = await mutate();
-  await recordAudit(client, entry);
-  return result;
-}
-
-/** Owner audit viewer query contract (safe server-side filtering). */
 export const auditListQuerySchema = pageQuerySchema.extend({
   organizationId: uuid,
   entityType: z.string().trim().min(1).max(100).optional(),

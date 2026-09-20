@@ -122,7 +122,17 @@ begin
     'client_portal_users',
     -- Ticket 19: the asynchronous ExportRequest lifecycle. The completion write
     -- and its audit append must roll back together.
-    'export_requests'
+    'export_requests',
+    -- Ticket 21: the last mutation-then-audit pairs, now atomic RPCs. The
+    -- domain write (or child write) and the audit append must roll back
+    -- together for life events, triggers, relationships, relationship
+    -- dynamics, client requests and client goals.
+    'life_events',
+    'triggers',
+    'relationships',
+    'relationship_dynamics',
+    'client_requests',
+    'client_goals'
   ]
   loop
     execute format(

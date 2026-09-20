@@ -162,7 +162,7 @@ describe.skipIf(!available)("Relationship + RelationshipDynamic (ticket 50)", ()
     ).rejects.toThrow();
   });
 
-  it("filters private signal evidence out of a dynamic", async () => {
+  it("refuses private signal evidence instead of storing it", async () => {
     const { data: privateSignal } = await specialist.client
       .from("signals")
       .insert({
@@ -192,7 +192,7 @@ describe.skipIf(!available)("Relationship + RelationshipDynamic (ticket 50)", ()
       organizationId: orgId,
       relationshipId: relId,
       title: "динамика",
-      evidenceRefs: [privateSignal!.id, visibleSignal!.id],
+      evidenceRefs: [visibleSignal!.id],
     });
 
     const { data: dynamic } = await specialist.client
@@ -200,8 +200,25 @@ describe.skipIf(!available)("Relationship + RelationshipDynamic (ticket 50)", ()
       .select("evidence_refs")
       .eq("id", dynamicId)
       .maybeSingle();
-    expect(dynamic?.evidence_refs).not.toContain(privateSignal!.id);
     expect(dynamic?.evidence_refs).toContain(visibleSignal!.id);
+
+    // Ticket 21: the write is atomic, so a private reference is refused as a
+    // whole rather than silently stripped — nothing is stored.
+    await expect(
+      createRelationshipDynamic(specialist.client, {
+        organizationId: orgId,
+        relationshipId: relId,
+        title: "приватная динамика",
+        evidenceRefs: [privateSignal!.id],
+      })
+    ).rejects.toThrow();
+
+    const { data: storedPrivate } = await specialist.client
+      .from("relationship_dynamics")
+      .select("id")
+      .eq("relationship_id", relId)
+      .eq("title", "приватная динамика");
+    expect(storedPrivate).toHaveLength(0);
   });
 
   it("stops new analyses and hides the view after consent revocation", async () => {

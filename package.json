@@ -22,8 +22,12 @@
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test",
     "security:audit": "node scripts/security-audit.mjs",
+    "audit:writes": "node scripts/check-unsafe-audit-writes.mjs",
+    "audit:rpc-permissions": "node scripts/check-rpc-permissions.mjs",
     "db:reset": "supabase db reset",
-    "db:types": "supabase gen types typescript --local > lib/supabase/database.types.ts"
+    "db:types": "supabase gen types typescript --local > lib/supabase/database.types.ts",
+    "db:types:check": "node scripts/db-types-check.mjs --check",
+    "verify": "pnpm audit:writes && pnpm audit:rpc-permissions && pnpm db:types:check"
   },
   "pnpm": {
     "overrides": {
