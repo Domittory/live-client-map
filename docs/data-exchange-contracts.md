@@ -396,6 +396,31 @@ commit_failed
 - Export не делает новых AI conclusions и не меняет business state.
 - Silent truncation запрещён. При failure частичный файл не доступен для download.
 
+### 10.1 Download (ticket 20)
+
+Готовый artifact выдаётся только через серверный delivery path; публичная или signed URL не создаётся, потому что такая ссылка переживает решение об authorization и может быть использована после revocation.
+
+- Перед каждой выдачей повторно проверяются tenant, ClientAssignment, role/audience, active consents, visibility и relationship privacy — те же правила, с которыми artifact собирался. Проверка выполняется от имени вызывающего (`claim_export_download`), поэтому отозванный assignment, роль или consent блокируют выдачу уже подготовленного файла.
+- Object читается service-role клиентом из private bucket, сверяется с sha256, записанным при completion, и только после повторной проверки доступа отдаётся вызывающему. Filename в ответе — тот же opaque `<kind>_<opaque-ref>_<UTC timestamp>.<ext>`.
+- Отказ фиксируется как `export.denied` с stable failure code (`download_consent_revoked`, `download_audience_revoked`, `download_relationship_consent_revoked`) и инкрементом счётчика отказов; raw content, filename и storage path в audit payload не попадают. Вызывающий, у которого нет tenant/client доступа, не получает audit-след: для него не фабрикуется событие.
+- Успешная выдача фиксируется как `export.downloaded` и содержит только kind, format, contract version, audience, размер выданных байт, sha256 и счётчик скачиваний.
+
+### 10.2 Retention: 30 дней (ticket 20)
+
+- После `expires_at` object удаляется из private bucket, ExportRequest переходит в `expired` (`expired_at`), artifact path/filename очищаются, и пишется событие `export.expired` (reason: retention) без filename и content.
+- Зависший `generating` request, который так и не завершил генерацию, закрывается как `failed` / `generation_timeout` с событием `export.failed`: терминальное состояние освобождает его от повторного сканирования и не держит idempotency key вечно.
+- Процесс идемпотентен и безопасен для повторного запуска после частичного operational failure: сначала удаляется object, затем выполняется DB-переход; уже терминальные строки не являются кандидатами, а отсутствующий object не считается ошибкой. Повторный запуск не пишет второе событие.
+- Точная команда запуска:
+
+  ```bash
+  node --experimental-strip-types \
+    --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+    --import ./scripts/support/register-alias.mjs \
+    scripts/reap-exports.ts
+  ```
+
+  Опции: `--limit <n>` (по умолчанию 100, максимум 1000) и `--dry-run` (только показать, что будет закрыто). Команда рассчитана на повторный запуск по расписанию.
+
 ## 11. Full client JSON archive v1
 
 Media type: `application/vnd.live-client-map.client-archive+json;version=1.0`.
