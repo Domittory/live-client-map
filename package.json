@@ -20,14 +20,20 @@
     "test:acceptance": "vitest run tests/acceptance",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test",
+    "security:audit": "node scripts/security-audit.mjs",
     "db:reset": "supabase db reset",
     "db:types": "supabase gen types typescript --local > lib/supabase/database.types.ts"
+  },
+  "pnpm": {
+    "overrides": {
+      "postcss@<=8.5.22": "8.5.26"
+    }
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.3",
-    "next": "15.1.6",
+    "next": "15.5.25",
     "pdf-lib": "^1.17.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -41,7 +47,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9.17.0",
-    "eslint-config-next": "15.1.6",
+    "eslint-config-next": "15.5.25",
     "pg": "^8.23.0",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
