@@ -263,3 +263,71 @@ function fakeResultFor(functionId: string, score?: number): Record<string, unkno
       return {};
   }
 }
+
+// --- Development provider for the import preview (ticket 11) -----------------
+
+/**
+ * Development/E2E variant of the fake provider.
+ *
+ * `FakeAiProvider` returns `{ signals: [] }` for ingest-signals, which is the
+ * contract-correct "no invented output" behaviour but leaves the text import
+ * preview with nothing to commit outside of production AI. This provider keeps
+ * that rule for every other function and returns one deterministic candidate
+ * per non-empty input line, so the two-phase import flow (preview → select →
+ * commit) is demonstrable in local development and in the browser E2E suite.
+ *
+ * It is selected only when the app runs with AI_PROVIDER != "openai", i.e.
+ * never in production, and no unit or integration test constructs it.
+ */
+export class FakeImportAiProvider implements AiProvider {
+  readonly providerKey = "fake-import";
+  readonly modelSnapshot = "fake-import-1";
+  readonly reasoningEffort = "none";
+
+  private readonly fallback = new FakeAiProvider();
+
+  async complete(call: AiProviderCall): Promise<AiProviderResponse> {
+    if (call.functionId !== "ai.ingest-signals.v1") return this.fallback.complete(call);
+
+    const envelope = call.envelope as {
+      contract_version?: string;
+      request_id?: string;
+      payload?: { raw_input?: unknown };
+    };
+    const rawInput =
+      typeof envelope.payload?.raw_input === "string" ? envelope.payload.raw_input : "";
+    const lines = rawInput
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .slice(0, 20);
+
+    const signals = lines.map((line, index) => ({
+      candidate_key: `fake-import-candidate-${index + 1}`,
+      raw_statement: line.slice(0, 4000),
+      statement_polarity: "unknown",
+      test_result: "not_tested",
+      normalized_meaning: line.slice(0, 4000),
+      inferred_opposite: null,
+      confidence: null,
+      life_areas: [],
+      tags: [],
+      context: "",
+      proposed_evidence_level: "L1_SINGLE_SIGNAL",
+      rationale: "Development fake: one candidate per imported line.",
+    }));
+
+    return {
+      ok: true,
+      output: {
+        contract_version: envelope.contract_version,
+        request_id: envelope.request_id,
+        warnings: [],
+        safety: { review_required: false, categories: [], rationale: "" },
+        result: { signals },
+      },
+      inputTokens: 1,
+      outputTokens: 1,
+    };
+  }
+}

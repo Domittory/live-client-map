@@ -317,6 +317,20 @@ rejected_by_reviewer
 committed
 ```
 
+Report records are addressable so a specialist can select before commit. Each entry carries:
+
+| Field         | Rule                                                                         |
+| ------------- | ---------------------------------------------------------------------------- |
+| `index`       | 1-based position inside the container (CSV data row / JSON record / AI сигнал) |
+| `external_id` | Stable address inside this import; used as the commit selection key          |
+| `status`      | Record status enum above                                                     |
+| `errors`      | `[]` или массив `{ code, field, message }`                                   |
+| `warnings`    | `[]` или массив `{ code, field, message }` (например, удалённые duplicate values) |
+| `statement`   | Валидированный исходный текст записи или `null`; показывается ревьюеру        |
+| `signal_id`   | `null` до commit; созданный Signal UUID после commit                         |
+
+Двухфазный commit: preview создаёт immutable source, DiagnosticSession и report без Signals; commit принимает **только выбранные** `external_id`, создаёт соответствующие pending Signals в одной transaction, записывает их `signal_id` в report, обновляет `counts.committed` и добавляет audit event `import.committed`. Повтор с тем же набором возвращает сохранённый report без новых записей; конфликтующий набор после успешного commit отклоняется. Top-level `signal_ids` публичного отчёта содержит созданные Signal UUID.
+
 Known error codes v1:
 
 ```text

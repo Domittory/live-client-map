@@ -14,7 +14,9 @@ export interface IngestSignalsInput {
   knownLifeAreas: string[];
 }
 
-interface AiSignal {
+/** One AI candidate as returned by ai.ingest-signals.v1. */
+export interface ExtractedAiSignal {
+  candidate_key: string;
   raw_statement: string;
   statement_polarity: string | null;
   test_result: string | null;
@@ -26,16 +28,19 @@ interface AiSignal {
 }
 
 /**
- * ingestSignals (ticket 33): run the raw session input through the safe AI
- * gateway and persist only pending, L0 evidence Signals. Raw statement is
- * preserved verbatim; the AI result never becomes independent evidence until
- * human review.
+ * Run the raw session input through the safe AI gateway and return the pending
+ * L0 candidates WITHOUT persisting anything (ticket 11).
+ *
+ * The import preview needs the candidates to build its validation report and to
+ * stage them for a later selective commit, but it must not create Signals. The
+ * gateway itself performs the environment, consent, redaction, rate-limit and
+ * contract checks, so extraction is exactly as guarded as a real ingest.
  */
-export async function ingestSignals(
+export async function extractSignals(
   client: SupabaseClient,
   provider: AiProvider,
   input: IngestSignalsInput
-): Promise<string[]> {
+): Promise<ExtractedAiSignal[]> {
   const result = await runAiFunction(client, provider, {
     functionId: "ai.ingest-signals.v1",
     organizationId: input.organizationId,
@@ -54,7 +59,22 @@ export async function ingestSignals(
     throw new ServiceError("INTERNAL_ERROR", result.error);
   }
 
-  const signals = (result.result?.signals ?? []) as AiSignal[];
+  return (result.result?.signals ?? []) as ExtractedAiSignal[];
+}
+
+/**
+ * ingestSignals (ticket 33): extract the AI candidates and persist them as
+ * pending, L0 evidence Signals in one atomic RPC. Raw statement is preserved
+ * verbatim; the AI result never becomes independent evidence until human
+ * review.
+ */
+export async function ingestSignals(
+  client: SupabaseClient,
+  provider: AiProvider,
+  input: IngestSignalsInput
+): Promise<string[]> {
+  const signals = await extractSignals(client, provider, input);
+
   // Every pending L0 Signal and the audit row commit together (ticket 05): a
   // half-ingested AI result can never become evidence.
   return runAtomicRpc<string[]>(
