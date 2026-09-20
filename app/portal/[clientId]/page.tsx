@@ -1,10 +1,11 @@
 import { notFound, redirect } from "next/navigation";
 import { getPortalOverview } from "@/lib/service/client-portal";
+import { listPortalFeedbackForms } from "@/lib/service/feedback-forms";
 import { createClient } from "@/lib/supabase/server";
 import { PortalDenied, PortalView } from "../portal-view";
 
 /**
- * Deep link into one client's portal (ticket 15).
+ * Deep link into one client's portal (ticket 15, feedback ticket 16).
  *
  * The id in the URL is only accepted when it equals the client the portal
  * identity is actually bound to. A cross-client id renders the neutral 404 —
@@ -28,5 +29,7 @@ export default async function PortalClientPage({
   if (!overview) return <PortalDenied email={user.email ?? ""} />;
   if (overview.clientId !== clientId) notFound();
 
-  return <PortalView overview={overview} />;
+  const forms = await listPortalFeedbackForms(supabase);
+
+  return <PortalView overview={overview} forms={forms} />;
 }

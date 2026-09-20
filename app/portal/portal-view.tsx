@@ -1,15 +1,21 @@
 import Link from "next/link";
 import { portalSignOut } from "@/app/actions/portal";
 import type { ClientPortalOverview } from "@/lib/service/client-portal";
+import type { PortalFeedbackForm } from "@/lib/service/feedback-forms";
+import { PortalFeedbackSection } from "./portal-feedback";
 
 /**
- * Portal presentation (ticket 15).
+ * Portal presentation (ticket 15, feedback ticket 16).
  *
  * The component renders only the fields of the privacy-filtered projection
  * (`ClientPortalOverview`): published client-visible notes, active
  * DevelopmentTargets, published correction summaries and human-approved
  * client-visible Recommendations. Private specialist reasoning and pending AI
  * output are not part of the type, so they cannot be rendered here.
+ *
+ * The feedback forms arrive as `PortalFeedbackForm[]` — already restricted to
+ * this client's active, unexpired forms by the guarded RPC. The component never
+ * sees another client's form, a draft, or an expired one.
  */
 
 function LevelBadge({ current, target }: { current: number | null; target: number | null }) {
@@ -22,17 +28,26 @@ function LevelBadge({ current, target }: { current: number | null; target: numbe
   );
 }
 
-export function PortalView({ overview }: { overview: ClientPortalOverview }) {
+export function PortalView({
+  overview,
+  forms = [],
+}: {
+  overview: ClientPortalOverview;
+  forms?: PortalFeedbackForm[];
+}) {
   const hasContent =
     Boolean(overview.notes && overview.notes.trim()) ||
     overview.agreedTargets.length > 0 ||
     overview.publishedSummaries.length > 0 ||
-    overview.clientVisibleRecommendations.length > 0;
+    overview.clientVisibleRecommendations.length > 0 ||
+    forms.length > 0;
 
   return (
     <main className="shell" data-testid="portal-page">
       <h1 data-testid="portal-title">Портал клиента</h1>
       <p data-testid="portal-client-name">Клиент: {overview.displayName ?? overview.clientId}</p>
+
+      <PortalFeedbackSection forms={forms} />
 
       <section>
         <h2>Опубликованная сводка</h2>

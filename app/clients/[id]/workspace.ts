@@ -22,6 +22,7 @@ export type ClientSectionKey =
   | "purpose"
   | "recommendations"
   | "portal"
+  | "feedback"
   | "import"
   | "consent"
   | "access";
@@ -78,6 +79,12 @@ export const CLIENT_SECTIONS: ClientSection[] = [
     key: "portal",
     label: "Портал клиента",
     path: (id) => `/clients/${id}/portal`,
+    requires: "write",
+  },
+  {
+    key: "feedback",
+    label: "Обратная связь",
+    path: (id) => `/clients/${id}/feedback`,
     requires: "write",
   },
   { key: "import", label: "Импорт", path: (id) => `/clients/${id}/import`, requires: "write" },
