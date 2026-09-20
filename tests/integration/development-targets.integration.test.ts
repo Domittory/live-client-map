@@ -1,6 +1,10 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDevelopmentTarget } from "@/lib/service/development-targets";
+import {
+  createDevelopmentTarget,
+  listDevelopmentTargets,
+  updateDevelopmentTarget,
+} from "@/lib/service/development-targets";
 
 try {
   process.loadEnvFile(".env.local");
@@ -107,5 +111,73 @@ describe.skipIf(!available)("development targets (ticket 30)", () => {
         currentLevel: 150,
       })
     ).rejects.toThrow();
+  });
+
+  it("updates a target atomically and requires a reason for progress changes", async () => {
+    const id = await createDevelopmentTarget(specialist.client, orgId, {
+      clientId,
+      name: "Границы",
+      currentLevel: 20,
+      targetLevel: 60,
+      successMarkers: ["говорит «нет» без вины"],
+    });
+
+    // A progress claim without a human reason is refused by service and SQL.
+    await expect(
+      updateDevelopmentTarget(specialist.client, orgId, { id, currentLevel: 45 })
+    ).rejects.toThrow();
+
+    await updateDevelopmentTarget(specialist.client, orgId, {
+      id,
+      currentLevel: 45,
+      successMarkers: ["говорит «нет» без вины", "держит паузу перед ответом"],
+      reason: "Подтверждено на сессии",
+    });
+
+    const { data: target } = await specialist.client
+      .from("development_targets")
+      .select("current_level, target_level, success_markers")
+      .eq("id", id)
+      .maybeSingle();
+    expect(target?.current_level).toBe(45);
+    expect(target?.target_level).toBe(60);
+    expect(target?.success_markers).toHaveLength(2);
+
+    // The audit row carries the acting specialist and the reason. The audit log
+    // is Owner-readable only, so the assertion uses the service-role channel.
+    const { data: audit } = await admin
+      .from("audit_log")
+      .select("action, actor_user_id, reason")
+      .eq("entity_id", id)
+      .eq("action", "development_target.updated")
+      .single();
+    expect(audit?.actor_user_id).toBe(specialist.id);
+    expect(audit?.reason).toBe("Подтверждено на сессии");
+  });
+
+  it("lists targets for the client and refuses a foreign field", async () => {
+    const targets = await listDevelopmentTargets(specialist.client, {
+      organizationId: orgId,
+      clientId,
+    });
+    expect(targets.length).toBeGreaterThan(0);
+    expect(targets.every((target) => target.name.length > 0)).toBe(true);
+
+    const id = await createDevelopmentTarget(specialist.client, orgId, {
+      clientId,
+      name: "Только чтение полей",
+    });
+    await expect(
+      updateDevelopmentTarget(specialist.client, orgId, { id, status: "archived", reason: "x" })
+    ).resolves.toBeUndefined();
+    // organization_id is not an updatable field of the target.
+    await expect(
+      specialist.client.rpc("update_development_target", {
+        p_org_id: orgId,
+        p_target_id: id,
+        p_patch: { organization_id: crypto.randomUUID() },
+        p_reason: "x",
+      })
+    ).resolves.toMatchObject({ error: expect.objectContaining({ code: "22023" }) });
   });
 });

@@ -1,6 +1,10 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createPurposeProfile, createPurposeSynthesis } from "@/lib/service/purpose";
+import {
+  createPurposeProfile,
+  createPurposeSynthesis,
+  getClientPurpose,
+} from "@/lib/service/purpose";
 
 try {
   process.loadEnvFile(".env.local");
@@ -111,5 +115,36 @@ describe.skipIf(!available)("purpose profiles + syntheses (ticket 31)", () => {
         sourceSystem: "astrology_fact",
       })
     ).rejects.toThrow();
+  });
+
+  it("reads the stored purpose layer for the client screen (ticket 13)", async () => {
+    const profileId = await createPurposeProfile(specialist.client, orgId, {
+      clientId,
+      sourceSystem: "specialist_assessment",
+      interpretation: "ручной вывод специалиста",
+      strengths: ["выдерживает паузу"],
+      potentialRoles: ["наставник"],
+      developmentDirections: ["спокойное лидерство"],
+      confidence: 65,
+      visibility: "sensitive",
+    });
+    const synthesisId = await createPurposeSynthesis(specialist.client, orgId, {
+      clientId,
+      summary: "ручной синтез по профилям",
+      crossSystemMatches: ["лидерство"],
+      potentialConflicts: [],
+      recommendedDevelopmentVectors: ["спокойное лидерство"],
+    });
+
+    const purpose = await getClientPurpose(specialist.client, { organizationId: orgId, clientId });
+    const profile = purpose.profiles.find((item) => item.id === profileId);
+    const synthesis = purpose.syntheses.find((item) => item.id === synthesisId);
+
+    expect(profile?.source_system).toBe("specialist_assessment");
+    expect(profile?.strengths).toEqual(["выдерживает паузу"]);
+    expect(profile?.potential_roles).toEqual(["наставник"]);
+    expect(profile?.visibility).toBe("sensitive");
+    expect(synthesis?.summary).toBe("ручной синтез по профилям");
+    expect(synthesis?.recommended_development_vectors).toEqual(["спокойное лидерство"]);
   });
 });

@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createResource, updateResource } from "@/lib/service/resources";
+import { createResource, listClientResources, updateResource } from "@/lib/service/resources";
 
 try {
   process.loadEnvFile(".env.local");
@@ -104,5 +104,25 @@ describe.skipIf(!available)("resources (ticket 29)", () => {
       .eq("id", id)
       .maybeSingle();
     expect(resource?.strength_score).toBe(80);
+  });
+
+  it("reads the client resource list with its evidence fields (ticket 13)", async () => {
+    const id = await createResource(specialist.client, orgId, {
+      clientId,
+      name: "Опора в конфликте",
+      strengthScore: 60,
+      confidenceScore: 55,
+      evidenceSummary: "подтверждено наблюдением",
+    });
+
+    const resources = await listClientResources(specialist.client, {
+      organizationId: orgId,
+      clientId,
+    });
+    const created = resources.find((resource) => resource.id === id);
+    expect(created?.name).toBe("Опора в конфликте");
+    expect(created?.evidence_summary).toBe("подтверждено наблюдением");
+    expect(created?.review_status).toBe("approved");
+    expect(created?.evidence_refs).toEqual([]);
   });
 });
