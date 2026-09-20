@@ -106,6 +106,16 @@ describe.skipIf(!available)("Export download and retention (ticket 20, §10)", (
     return rows.map((row) => row.action);
   }
 
+  /** Sorted action multiset: audit rows of one transaction share created_at. */
+  function sortedActions(rows: { action: string }[]): string[] {
+    return [...actions(rows)].sort();
+  }
+
+  /** The last recorded transition of one action, independent of row ordering. */
+  function lastOf<T extends { action: string }>(rows: T[], action: string): T | undefined {
+    return rows.filter((row) => row.action === action).at(-1);
+  }
+
   async function requestArchive(
     idempotencyKey = key(),
     actor = owner.client,
@@ -291,7 +301,13 @@ describe.skipIf(!available)("Export download and retention (ticket 20, §10)", (
 
     // The audit row records the delivery shape, never the file itself.
     const rows = await auditRows(ticket.exportId);
-    expect(actions(rows)).toEqual(["export.requested", "export.completed", "export.downloaded"]);
+    expect(sortedActions(rows)).toEqual(
+      sortedActions([
+        { action: "export.requested" },
+        { action: "export.completed" },
+        { action: "export.downloaded" },
+      ])
+    );
     const downloaded = rows.find((row) => row.action === "export.downloaded")!;
     expect(downloaded).toMatchObject({
       entity_type: "client",
@@ -348,13 +364,15 @@ describe.skipIf(!available)("Export download and retention (ticket 20, §10)", (
     expect(row.download_denied_count).toBe(1);
 
     const rows = await auditRows(ticket.exportId);
-    expect(actions(rows)).toEqual([
-      "export.requested",
-      "export.completed",
-      "export.downloaded",
-      "export.denied",
-    ]);
-    const denied = rows.at(-1)!;
+    expect(sortedActions(rows)).toEqual(
+      sortedActions([
+        { action: "export.requested" },
+        { action: "export.completed" },
+        { action: "export.downloaded" },
+        { action: "export.denied" },
+      ])
+    );
+    const denied = lastOf(rows, "export.denied")!;
     expect(denied).toMatchObject({
       entity_type: "client",
       entity_id: clientId,
@@ -396,7 +414,13 @@ describe.skipIf(!available)("Export download and retention (ticket 20, §10)", (
     // A caller with no client access at all learns nothing: no new audit row and no
     // denial counter, exactly like request_export()'s no-access branch.
     const rows = await auditRows(ticket.exportId);
-    expect(actions(rows)).toEqual(["export.requested", "export.completed", "export.downloaded"]);
+    expect(sortedActions(rows)).toEqual(
+      sortedActions([
+        { action: "export.requested" },
+        { action: "export.completed" },
+        { action: "export.downloaded" },
+      ])
+    );
     expect((await requestRow(ticket.exportId)).download_denied_count).toBe(0);
 
     await admin
@@ -418,8 +442,14 @@ describe.skipIf(!available)("Export download and retention (ticket 20, §10)", (
     });
 
     const rows = await auditRows(ticket.exportId);
-    expect(actions(rows)).toEqual(["export.requested", "export.completed", "export.denied"]);
-    expect(rows.at(-1)!.reason).toBe("export download refused: audience_revoked");
+    expect(sortedActions(rows)).toEqual(
+      sortedActions([
+        { action: "export.requested" },
+        { action: "export.completed" },
+        { action: "export.denied" },
+      ])
+    );
+    expect(lastOf(rows, "export.denied")?.reason).toBe("export download refused: audience_revoked");
     expect((await requestRow(ticket.exportId)).download_denied_count).toBe(1);
   });
 
@@ -444,7 +474,9 @@ describe.skipIf(!available)("Export download and retention (ticket 20, §10)", (
       code: "FORBIDDEN",
     });
     const rows = await auditRows(ticket.exportId);
-    expect(rows.at(-1)!.reason).toBe("export download refused: relationship_consent_revoked");
+    expect(lastOf(rows, "export.denied")?.reason).toBe(
+      "export download refused: relationship_consent_revoked"
+    );
 
     // Restoring consent restores delivery: the artifact itself was never modified.
     await grantConsent(partnerClientId, "relationship_analysis");
@@ -459,7 +491,9 @@ describe.skipIf(!available)("Export download and retention (ticket 20, §10)", (
     });
 
     const rows = await auditRows(ticket.exportId);
-    expect(actions(rows)).toEqual(["export.requested", "export.completed"]);
+    expect(sortedActions(rows)).toEqual(
+      sortedActions([{ action: "export.requested" }, { action: "export.completed" }])
+    );
     expect((await requestRow(ticket.exportId)).download_denied_count).toBe(0);
   });
 
@@ -502,13 +536,15 @@ describe.skipIf(!available)("Export download and retention (ticket 20, §10)", (
     expect(row.artifact_filename).toBeNull();
 
     const rows = await auditRows(ticket.exportId);
-    expect(actions(rows)).toEqual([
-      "export.requested",
-      "export.completed",
-      "export.downloaded",
-      "export.expired",
-    ]);
-    const expired = rows.at(-1)!;
+    expect(sortedActions(rows)).toEqual(
+      sortedActions([
+        { action: "export.requested" },
+        { action: "export.completed" },
+        { action: "export.downloaded" },
+        { action: "export.expired" },
+      ])
+    );
+    const expired = lastOf(rows, "export.expired")!;
     expect(expired).toMatchObject({
       entity_type: "client",
       entity_id: clientId,
@@ -633,8 +669,12 @@ describe.skipIf(!available)("Export download and retention (ticket 20, §10)", (
     expect(row.failure_code).toBe("generation_timeout");
 
     const rows = await auditRows(exportId);
-    expect(actions(rows)).toEqual(["export.requested", "export.failed"]);
-    expect(rows.at(-1)!.reason).toBe("retention: generation did not complete within 30 days");
+    expect(sortedActions(rows)).toEqual(
+      sortedActions([{ action: "export.requested" }, { action: "export.failed" }])
+    );
+    expect(lastOf(rows, "export.failed")?.reason).toBe(
+      "retention: generation did not complete within 30 days"
+    );
 
     // The row is terminal, so a re-run neither touches it nor writes again.
     const before = await auditRows(exportId);

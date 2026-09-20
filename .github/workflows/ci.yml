@@ -1,15 +1,37 @@
 name: CI
 
+# Both jobs below run the documented release command, split by phase, so a green
+# CI means the same blocking gates passed that a local `pnpm release:check`
+# runs (ticket 23):
+#
+#   quality        -> pnpm release:check:static
+#   integration    -> pnpm release:check:database
+#
+# Each job uploads its unsigned evidence record (`.release/*.json`) so the run is
+# tied to an exact SHA and lockfile. The push of a release commit and the remote
+# CI check for that SHA are the lead's decision, not the agent's.
+
 on:
   push:
     branches: [main]
   pull_request:
 
+env:
+  # Local Supabase demo values, used only to build/serve in CI. Never production
+  # secrets; production AI stays disabled by the release gate.
+  NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+  SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+  # Postgres for the integration/E2E suites.
+  SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+  AI_PROVIDER: fake
+  AI_PRODUCTION_ENABLED: "false"
+
 jobs:
   quality:
-    name: Quality gates
+    name: Quality gates (static)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,34 +47,27 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      # The release command's first gate re-verifies the frozen lockfile, but the
+      # script itself needs node_modules (pg) before it can start.
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Production dependency security gate
-        run: pnpm security:audit
+      - name: Release gate — static phase
+        run: pnpm release:check:static
 
-      - name: Lint
-        run: pnpm lint
-
-      - name: Unsafe audit-write guard
-        run: pnpm audit:writes
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Unit tests
-        run: pnpm test:unit
-
-      - name: Smoke tests
-        run: pnpm test:smoke
-
-      - name: Acceptance tests
-        run: pnpm test:acceptance
+      - name: Upload release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-static
+          path: .release/*.json
+          if-no-files-found: warn
+          retention-days: 30
 
   integration:
     name: Integration and E2E tests (Supabase)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -79,34 +94,23 @@ jobs:
       - name: Start local Supabase
         run: supabase start
 
-      # `supabase start` only applies migrations. The seed additionally creates
-      # the local-only `test_support` fault-injection schema, without which every
-      # atomic-rollback test silently skips — so the database is rebuilt from
-      # migrations + seed before the suite runs.
-      - name: Apply migrations and seed
-        run: supabase db reset
-
-      - name: Generated DB types are current
-        run: pnpm db:types:check
-
-      - name: RPC permissions and search paths
-        run: pnpm audit:rpc-permissions
-
-      - name: Run integration tests
-        run: pnpm test:integration
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
-          SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
-
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: E2E tests
-        run: pnpm test:e2e
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
-          # The browser specs seed users/orgs and read persisted state through the
-          # service-role channel, so the E2E job needs this key as well.
-          SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+      # The database phase rebuilds the database itself:
+      #   supabase db reset --no-seed   -> clean rebuild from migrations alone
+      #   supabase db push --dry-run    -> no pending migrations
+      #   supabase db reset             -> seed, so fault-injection tests run
+      #   db:types:check, audit:rpc-permissions
+      #   integration (serialized), e2e
+      - name: Release gate — database phase
+        run: pnpm release:check:database
+
+      - name: Upload release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-database
+          path: .release/*.json
+          if-no-files-found: warn
+          retention-days: 30

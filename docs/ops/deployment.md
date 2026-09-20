@@ -42,6 +42,24 @@ push в `main` отключён (тикет 67). Это не удаляет pipe
    применяются миграции и прогоняется smoke.
 4. Публикация приложения через Vercel выполняется его отдельно настроенной Git-интеграцией.
 
+## Release gate перед деплоем
+
+Перед применением миграций и публикацией приложения release-коммит проходит
+`pnpm release:check` (см. [release-readiness.md](./release-readiness.md) и
+[development.md](../development.md#release-gate-pnpm-releasecheck)). Gate включает чистую
+пересборку базы **только из миграций** (`supabase db reset --no-seed`) со сверкой
+`supabase_migrations.schema_migrations` и локальный `supabase db push --dry-run --local`, который
+не должен показывать pending-миграций.
+
+Target-environment dry-run остаётся обязательным и выполняется:
+
+- для staging — job `validate-migrations` в `deploy-staging.yml` на pull request в `main`
+  (`supabase db push --dry-run --project-ref <staging-ref>`);
+- для production — workflow `Deploy to production` перед применением (`--dry-run`, затем apply).
+
+Лог target dry-run прикладывается к [release-checklist.md](./release-checklist.md). Evidence
+автоматической части (SHA, lockfile, timestamp, результат каждого gate) пишется в `.release/`.
+
 ## Миграции
 
 - Миграции — forward-only SQL-файлы в `supabase/migrations/`, применяются командой

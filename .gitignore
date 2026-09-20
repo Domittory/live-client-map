@@ -13,6 +13,9 @@
 # testing
 /coverage
 
+# release gate evidence (generated, unsigned; see docs/ops/release-checklist.md)
+/.release/
+
 # playwright
 /test-results/
 /playwright-report/

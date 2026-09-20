@@ -20,6 +20,7 @@
     "test:smoke": "vitest run tests/smoke",
     "test:acceptance": "vitest run tests/acceptance",
     "test:integration": "vitest run tests/integration",
+    "test:integration:release": "vitest run --no-file-parallelism tests/integration",
     "test:e2e": "playwright test",
     "security:audit": "node scripts/security-audit.mjs",
     "audit:writes": "node scripts/check-unsafe-audit-writes.mjs",
@@ -27,7 +28,13 @@
     "db:reset": "supabase db reset",
     "db:types": "supabase gen types typescript --local > lib/supabase/database.types.ts",
     "db:types:check": "node scripts/db-types-check.mjs --check",
-    "verify": "pnpm audit:writes && pnpm audit:rpc-permissions && pnpm db:types:check"
+    "verify": "pnpm audit:writes && pnpm audit:rpc-permissions && pnpm db:types:check",
+    "release:check": "node scripts/release-check.mjs",
+    "release:check:static": "node scripts/release-check.mjs --phase static",
+    "release:check:database": "node scripts/release-check.mjs --phase database",
+    "release:checklist": "node scripts/check-release-checklist.mjs",
+    "release:checklist:complete": "node scripts/check-release-checklist.mjs --require-complete",
+    "release:ai-gate": "node scripts/check-production-ai.mjs"
   },
   "pnpm": {
     "overrides": {
