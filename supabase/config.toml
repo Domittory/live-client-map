@@ -233,6 +233,17 @@ otp_length = 6
 # Number of seconds before the email OTP expires (defaults to 1 hour).
 otp_expiry = 3600
 
+# Client Portal magic link (ticket 15). The default template links to the
+# Supabase /verify endpoint, whose PKCE handshake needs the code verifier of the
+# browser that requested the link — but the link is requested server-side by a
+# specialist, so the client's browser never has that verifier. This template
+# instead points the email at the app's own /auth/confirm route, which verifies
+# the single-use token_hash. {{ .RedirectTo }} is the per-request origin the
+# invite action passes as `emailRedirectTo`.
+[auth.email.template.magic_link]
+subject = "Ссылка для входа в портал клиента"
+content_path = "./supabase/templates/magic_link.html"
+
 # Use a production-ready SMTP server
 # [auth.email.smtp]
 # enabled = true

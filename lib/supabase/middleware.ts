@@ -32,7 +32,9 @@ export async function updateSession(request: NextRequest) {
 
   if (!user && !isPublic) {
     const url = request.nextUrl.clone();
-    url.pathname = "/login";
+    // A portal route sends the visitor to the portal sign-in explanation
+    // instead of the organization login form.
+    url.pathname = request.nextUrl.pathname.startsWith("/portal") ? "/portal/login" : "/login";
     return NextResponse.redirect(url);
   }
 
