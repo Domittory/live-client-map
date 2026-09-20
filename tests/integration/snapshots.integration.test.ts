@@ -8,11 +8,13 @@ import {
   reviewFollowUpAssessment,
   scheduleFollowUp,
 } from "@/lib/service/follow-ups";
-import { listModelChanges } from "@/lib/service/model-changes";
+import { addContradiction, createHypothesis } from "@/lib/service/hypotheses";
+import { listModelChanges, listModelIntervalChanges } from "@/lib/service/model-changes";
 import {
   evaluateCoreNodeReactivation,
   reviewCoreNodeReactivation,
 } from "@/lib/service/reactivation";
+import { createRelation } from "@/lib/service/relations";
 import { SCORING_MODEL_VERSION } from "@/lib/service/scoring";
 import {
   SNAPSHOT_CATEGORIES,
@@ -357,6 +359,127 @@ describe.skipIf(!available)("ModelChange and PsychologicalSnapshot (ticket 43)",
 
     const del = await specialist.client.from("model_changes").delete().eq("id", change.id);
     expect(del.error).not.toBeNull();
+  });
+
+  /**
+   * Ticket 14: comparing two versions must surface the DifferentialHypotheses
+   * and contradictions created in that interval without adding a snapshot
+   * category or inventing historical state. Every row is version-bounded by its
+   * own creation time, so a row created before the previous snapshot or after
+   * the compared one is never included.
+   */
+  it("surfaces the DifferentialHypotheses and contradictions created between two versions", async () => {
+    // Created before the interval: must not appear in it.
+    const oldHypothesis = await createHypothesis(specialist.client, orgId, {
+      clientId,
+      title: `Старая гипотеза ${crypto.randomUUID()}`,
+    });
+
+    const before = await generateSnapshot(specialist.client, {
+      clientId,
+      reason: "interval before",
+    });
+
+    const nodeA = await insertCoreNode(`Interval node A ${crypto.randomUUID()}`, "weakened");
+    const nodeB = await insertCoreNode(`Interval node B ${crypto.randomUUID()}`, "active");
+    const relationId = await createRelation(specialist.client, orgId, {
+      clientId,
+      fromCoreNodeId: nodeA,
+      toCoreNodeId: nodeB,
+      relationType: "contradicts",
+      confidence: 60,
+      evidenceSummary: "Сигналы расходятся",
+    });
+
+    const newHypothesis = await createHypothesis(specialist.client, orgId, {
+      clientId,
+      title: `Новая гипотеза ${crypto.randomUUID()}`,
+    });
+    await addContradiction(specialist.client, orgId, newHypothesis, "signal:against");
+
+    // A real ModelChange in the same interval (approved reactivation).
+    await admin.from("core_nodes").update({ activation_score: 25 }).eq("id", nodeA);
+    await makeReactivatable(nodeA);
+    const { proposal } = await evaluateCoreNodeReactivation(specialist.client, {
+      coreNodeId: nodeA,
+    });
+    await reviewCoreNodeReactivation(specialist.client, {
+      reactivationId: proposal!.id,
+      decision: "approve",
+    });
+
+    const after = await generateSnapshot(specialist.client, { clientId, reason: "interval after" });
+    const comparison = await compareWithPrevious(specialist.client, after.id);
+    expect(comparison.previous?.id).toBe(before.id);
+
+    const interval = comparison.interval;
+    expect(interval).not.toBeNull();
+    expect(interval!.from).toBe(before.generated_at);
+    expect(interval!.to).toBe(after.generated_at);
+
+    const hypothesisIds = interval!.hypotheses.map((hypothesis) => hypothesis.id);
+    expect(hypothesisIds).toContain(newHypothesis);
+    expect(hypothesisIds).not.toContain(oldHypothesis);
+    const newHypothesisView = interval!.hypotheses.find(
+      (hypothesis) => hypothesis.id === newHypothesis
+    );
+    expect(newHypothesisView?.evidenceAgainst).toContain("signal:against");
+
+    const contradiction = interval!.contradictions.find((row) => row.id === relationId);
+    expect(contradiction).toBeDefined();
+    expect(contradiction!.fromCoreNodeId).toBe(nodeA);
+    expect(contradiction!.toCoreNodeId).toBe(nodeB);
+    expect(contradiction!.fromLabel).toContain("Interval node A");
+    expect(contradiction!.evidenceSummary).toBe("Сигналы расходятся");
+
+    expect(interval!.modelChanges.map((change) => change.entity_id)).toContain(nodeA);
+
+    // Every returned row is inside the interval.
+    for (const hypothesis of interval!.hypotheses) {
+      expect(hypothesis.createdAt > interval!.from!).toBe(true);
+      expect(hypothesis.createdAt <= interval!.to).toBe(true);
+    }
+
+    // A row created after the compared version is not part of the interval.
+    const laterHypothesis = await createHypothesis(specialist.client, orgId, {
+      clientId,
+      title: `Поздняя гипотеза ${crypto.randomUUID()}`,
+    });
+    const reread = await compareWithPrevious(specialist.client, after.id);
+    expect(reread.interval!.hypotheses.map((hypothesis) => hypothesis.id)).not.toContain(
+      laterHypothesis
+    );
+
+    // No new snapshot category and no hypothesis state inside the snapshot.
+    expect(SNAPSHOT_CATEGORIES as readonly string[]).not.toContain("differential_hypotheses");
+    expect(SNAPSHOT_CATEGORIES as readonly string[]).not.toContain("contradictions");
+    expect(JSON.stringify(after)).not.toContain(newHypothesis);
+  });
+
+  it("names insufficient data explicitly when the interval is empty", async () => {
+    const before = await generateSnapshot(specialist.client, { clientId, reason: "empty before" });
+    const after = await generateSnapshot(specialist.client, { clientId, reason: "empty after" });
+
+    const comparison = await compareWithPrevious(specialist.client, after.id);
+    expect(comparison.previous?.id).toBe(before.id);
+
+    const interval = comparison.interval!;
+    expect(interval.hypotheses).toHaveLength(0);
+    expect(interval.contradictions).toHaveLength(0);
+    expect(interval.modelChanges).toHaveLength(0);
+    expect(interval.limits.join(" ")).toContain("Недостаточно данных");
+    expect(interval.limits.join(" ")).toContain("задним числом не восстанавливается");
+
+    // The interval read model is a public read: without a lower bound it says so
+    // instead of inventing a boundary.
+    const unbounded = await listModelIntervalChanges(specialist.client, {
+      organizationId: orgId,
+      clientId,
+      from: null,
+      to: after.generated_at,
+    });
+    expect(unbounded.from).toBeNull();
+    expect(unbounded.limits.join(" ")).toContain("нет предыдущей версии");
   });
 
   it("RLS: another organization cannot read snapshots, model changes or generate", async () => {

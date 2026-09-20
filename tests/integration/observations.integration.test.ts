@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { listAuditLog } from "@/lib/service/audit";
 import {
   createMarker,
   createObservation,
@@ -35,6 +36,8 @@ describe.skipIf(!available)("Observations and BehavioralMarkers (ticket 40)", ()
   let themeId: string;
   let resourceId: string;
   let specialist: { id: string; client: SupabaseClient };
+  /** Organization owner, used to read the AuditLog through its public service. */
+  let owner: { id: string; client: SupabaseClient };
 
   function anonClient() {
     return createClient(url!, anonKey!, {
@@ -67,7 +70,7 @@ describe.skipIf(!available)("Observations and BehavioralMarkers (ticket 40)", ()
   }
 
   beforeAll(async () => {
-    const owner = await createUser(`owner-${crypto.randomUUID()}@example.com`);
+    owner = await createUser(`owner-${crypto.randomUUID()}@example.com`);
     const { data } = await owner.client.rpc("create_organization", {
       org_name: `Observations Org ${crypto.randomUUID()}`,
     });
@@ -450,6 +453,76 @@ describe.skipIf(!available)("Observations and BehavioralMarkers (ticket 40)", ()
         linkedCoreNodeId: "a0000000-0000-4000-8000-999999999999",
       })
     ).rejects.toThrow(/Invalid link/i);
+  });
+
+  /**
+   * Ticket 14 regression: the Theme link is stored in the `linked_theme_id`
+   * column. The public camel-case input (`linkedThemeId`) must be mapped to that
+   * schema column name — writing `linkedThemeId` straight into the row (as an
+   * earlier revision did) fails the write, so the stored relation and its audit
+   * row are the proof that the mapping is right.
+   */
+  it("updates a BehavioralMarker Theme link through the public service boundary", async () => {
+    const marker = await createMarker(specialist.client, {
+      organizationId: orgId,
+      clientId,
+      name: `Маркер со связью с темой ${crypto.randomUUID()}`,
+      markerType: "scale",
+      scaleMin: 0,
+      scaleMax: 10,
+      baselineValue: 4,
+      linkedCoreNodeId: coreNodeId,
+    });
+    expect(marker.linked_theme_id).toBeNull();
+
+    const updated = await updateMarker(specialist.client, {
+      markerId: marker.id,
+      linkedThemeId: themeId,
+    });
+
+    // The stored relation comes back through the public service read.
+    expect(updated.linked_theme_id).toBe(themeId);
+    expect(updated.linked_core_node_id).toBe(coreNodeId);
+    expect((await getMarker(specialist.client, marker.id)).linked_theme_id).toBe(themeId);
+
+    // The audit row is read through the public audit service (owner viewer).
+    const audit = await listAuditLog(owner.client, {
+      organizationId: orgId,
+      entityType: "behavioral_marker",
+      entityId: marker.id,
+      action: "behavioral_marker.update",
+    });
+    expect(audit.items).toHaveLength(1);
+    expect(audit.items[0].actor_user_id).toBe(specialist.id);
+    expect(audit.items[0].entity_id).toBe(marker.id);
+
+    // Clearing the link is a real update, not a silent no-op.
+    const cleared = await updateMarker(specialist.client, {
+      markerId: marker.id,
+      linkedThemeId: null,
+    });
+    expect(cleared.linked_theme_id).toBeNull();
+
+    // A theme of another client is rejected and leaves the stored link intact.
+    const { data: foreignTheme, error: foreignThemeError } = await admin
+      .from("themes")
+      .insert({
+        organization_id: orgId,
+        client_id: otherClientId,
+        name: "Foreign theme",
+        status: "active",
+      })
+      .select("id")
+      .single();
+    if (foreignThemeError) throw new Error(foreignThemeError.message);
+
+    await expect(
+      updateMarker(specialist.client, {
+        markerId: marker.id,
+        linkedThemeId: foreignTheme!.id,
+      })
+    ).rejects.toThrow(/Invalid link/i);
+    expect((await getMarker(specialist.client, marker.id)).linked_theme_id).toBeNull();
   });
 
   it("RLS: another organization cannot read or write observations and markers", async () => {

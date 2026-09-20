@@ -1,8 +1,20 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { listModelChanges, type ModelChange } from "@/lib/service/model-changes";
+import {
+  listModelChanges,
+  type ModelChange,
+  type ModelIntervalChanges,
+} from "@/lib/service/model-changes";
+import {
+  INSUFFICIENT_DATA_LABEL,
+  evidenceTrailHref,
+} from "@/lib/service/model-change-presentation";
 import { ServiceError } from "@/lib/service/errors";
 import { listModelExplanations, type ModelExplanation } from "@/lib/service/explanations";
+import {
+  HYPOTHESIS_STATUS_LABELS,
+  RELATION_TYPE_LABELS,
+} from "@/lib/service/model-review-presentation";
 import {
   SNAPSHOT_CATEGORIES,
   compareWithPrevious,
@@ -66,6 +78,165 @@ function DiffSection({ changes }: { changes: SnapshotDiff | null }) {
           </div>
         );
       })}
+    </section>
+  );
+}
+
+/**
+ * Ticket 14: every model change is presented together with a link to its
+ * Evidence Trail. Entity types the Evidence Drawer does not support (for
+ * example a FollowUp or a BehavioralMarker) get an explicit insufficient-data
+ * note instead of a link that would only fail validation.
+ */
+function EvidenceTrailLink({
+  clientId,
+  entityType,
+  entityId,
+}: {
+  clientId: string;
+  entityType: string;
+  entityId: string;
+}) {
+  const href = evidenceTrailHref(clientId, entityType, entityId);
+  if (!href) {
+    return (
+      <p className="hint" data-testid="evidence-trail-unavailable">
+        {INSUFFICIENT_DATA_LABEL}: для сущности «{entityType}» Evidence Trail не предусмотрен.
+      </p>
+    );
+  }
+  return (
+    <Link href={href} data-testid="evidence-trail-link">
+      Evidence Trail
+    </Link>
+  );
+}
+
+/**
+ * Version-bounded interval read model (ticket 14): the DifferentialHypotheses,
+ * contradictions and ModelChanges created between the previous and the compared
+ * snapshot. The snapshot categories stay unchanged — this section derives the
+ * interval from the model-change read layer and names every gap explicitly.
+ */
+function IntervalChangesSection({
+  interval,
+  clientId,
+}: {
+  interval: ModelIntervalChanges | null;
+  clientId: string;
+}) {
+  if (!interval) {
+    return (
+      <section data-testid="model-interval">
+        <h3>Изменения модели между версиями</h3>
+        <p role="alert" data-testid="interval-insufficient-data">
+          {INSUFFICIENT_DATA_LABEL}: это первая версия snapshot — предыдущей версии для сравнения
+          нет.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section data-testid="model-interval">
+      <h3>Изменения модели между версиями</h3>
+      <p className="hint" data-testid="interval-bounds">
+        Интервал: {interval.from} → {interval.to}
+      </p>
+
+      <h4>Новые DifferentialHypotheses ({interval.hypotheses.length})</h4>
+      {interval.hypotheses.length === 0 ? (
+        <p role="alert" data-testid="interval-no-hypotheses">
+          {INSUFFICIENT_DATA_LABEL}: между этими версиями новые DifferentialHypotheses не
+          создавались.
+        </p>
+      ) : (
+        <ul data-testid="interval-hypotheses">
+          {interval.hypotheses.map((hypothesis) => (
+            <li key={hypothesis.id} data-testid="interval-hypothesis">
+              <strong>{hypothesis.title}</strong> [
+              {HYPOTHESIS_STATUS_LABELS[hypothesis.status] ?? hypothesis.status}]
+              <p>
+                Подтверждающих: {hypothesis.evidenceFor.length}; противоречащих:{" "}
+                {hypothesis.evidenceAgainst.length}
+              </p>
+              {hypothesis.evidenceFor.length === 0 ? (
+                <p className="hint">
+                  {INSUFFICIENT_DATA_LABEL}: подтверждающих доказательств у гипотезы нет.
+                </p>
+              ) : null}
+              <EvidenceTrailLink
+                clientId={clientId}
+                entityType="differential_hypothesis"
+                entityId={hypothesis.id}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <h4>
+        {RELATION_TYPE_LABELS.contradicts} ({interval.contradictions.length})
+      </h4>
+      {interval.contradictions.length === 0 ? (
+        <p role="alert" data-testid="interval-no-contradictions">
+          {INSUFFICIENT_DATA_LABEL}: между этими версиями новые противоречия (contradicts) не
+          создавались.
+        </p>
+      ) : (
+        <ul data-testid="interval-contradictions">
+          {interval.contradictions.map((contradiction) => (
+            <li key={contradiction.id} data-testid="interval-contradiction">
+              {contradiction.fromLabel} ↔ {contradiction.toLabel}
+              {contradiction.evidenceSummary ? `: ${contradiction.evidenceSummary}` : ""}
+              {contradiction.evidenceSummary ? null : (
+                <p className="hint">
+                  {INSUFFICIENT_DATA_LABEL}: описание противоречия не заполнено.
+                </p>
+              )}
+              <EvidenceTrailLink
+                clientId={clientId}
+                entityType="core_node"
+                entityId={contradiction.fromCoreNodeId}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <h4>Новые ModelChanges ({interval.modelChanges.length})</h4>
+      {interval.modelChanges.length === 0 ? (
+        <p role="alert" data-testid="interval-no-model-changes">
+          {INSUFFICIENT_DATA_LABEL}: между этими версиями ModelChange не зафиксировано.
+        </p>
+      ) : (
+        <ul data-testid="interval-model-changes">
+          {interval.modelChanges.map((change) => (
+            <li key={change.id} data-testid="interval-model-change">
+              {change.occurred_at}: {change.entity_type} {change.entity_id} — {change.change_reason}
+              {change.evidence_refs.length === 0 ? (
+                <p className="hint">
+                  {INSUFFICIENT_DATA_LABEL}: evidence не привязан к этому изменению.
+                </p>
+              ) : (
+                <p>Evidence: {change.evidence_refs.join(", ")}</p>
+              )}
+              <EvidenceTrailLink
+                clientId={clientId}
+                entityType={change.entity_type}
+                entityId={change.entity_id}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <h4>Ограничения данных интервала</h4>
+      <ul data-testid="interval-limits">
+        {interval.limits.map((limit) => (
+          <li key={limit}>{limit}</li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -474,9 +645,19 @@ export default async function SnapshotsPage({ searchParams }: { searchParams: Se
             {modelChanges && modelChanges.items.length > 0 ? (
               <ul>
                 {modelChanges.items.map((change) => (
-                  <li key={change.id}>
+                  <li key={change.id} data-testid="model-change">
                     {change.occurred_at}: {change.entity_type} {change.entity_id} —{" "}
                     {change.change_reason} (evidence: {change.evidence_refs.length})
+                    {change.evidence_refs.length === 0 ? (
+                      <p className="hint">
+                        {INSUFFICIENT_DATA_LABEL}: evidence не привязан к этому изменению.
+                      </p>
+                    ) : null}
+                    <EvidenceTrailLink
+                      clientId={clientId}
+                      entityType={change.entity_type}
+                      entityId={change.entity_id}
+                    />
                   </li>
                 ))}
               </ul>
@@ -506,6 +687,10 @@ export default async function SnapshotsPage({ searchParams }: { searchParams: Se
         <>
           <SnapshotDetail snapshot={comparison.snapshot} />
           <DiffSection changes={comparison.changes} />
+          <IntervalChangesSection
+            interval={comparison.interval}
+            clientId={comparison.snapshot.client_id}
+          />
         </>
       ) : null}
     </main>

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { AI_CONTRACTS, MODEL_CONFIG } from "@/lib/ai/contracts";
 import { requireConsent } from "./consent";
 import { ServiceError } from "./errors";
+import { listModelIntervalChanges, type ModelIntervalChanges } from "./model-changes";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
 import { SCORING_MODEL_VERSION } from "./scoring";
 import { runAtomicRpc } from "./transaction";
@@ -554,12 +555,24 @@ export interface SnapshotComparison {
   previous: PsychologicalSnapshot | null;
   /** Null when this is the first snapshot of the client. */
   changes: SnapshotDiff | null;
+  /**
+   * Version-bounded interval read model (ticket 14): the DifferentialHypotheses,
+   * contradiction relations and ModelChanges created between the previous and
+   * the compared snapshot. Null when this is the first snapshot. The snapshot
+   * categories are deliberately NOT extended — the interval is derived from the
+   * existing tables by their own creation time, so no historical state is
+   * fabricated.
+   */
+  interval: ModelIntervalChanges | null;
 }
 
 /**
  * Compare a snapshot with the previous version of the same client
  * ("Changes since previous snapshot", SPEC §25). The diff is recomputed from
- * the stored immutable contents, so it is reproducible.
+ * the stored immutable contents, so it is reproducible. The version-bounded
+ * `interval` additionally names the DifferentialHypotheses and contradictions
+ * created between the two versions (ticket 14) — data that is stored outside the
+ * snapshot categories.
  */
 export async function compareWithPrevious(
   client: SupabaseClient,
@@ -582,6 +595,14 @@ export async function compareWithPrevious(
     snapshot,
     previous,
     changes: previous ? diffSnapshots(snapshotContent(previous), snapshotContent(snapshot)) : null,
+    interval: previous
+      ? await listModelIntervalChanges(client, {
+          organizationId: snapshot.organization_id,
+          clientId: snapshot.client_id,
+          from: previous.generated_at,
+          to: snapshot.generated_at,
+        })
+      : null,
   };
 }
 
