@@ -24,6 +24,7 @@ export type ClientSectionKey =
   | "portal"
   | "feedback"
   | "import"
+  | "export"
   | "consent"
   | "access";
 
@@ -88,6 +89,15 @@ export const CLIENT_SECTIONS: ClientSection[] = [
     requires: "write",
   },
   { key: "import", label: "Импорт", path: (id) => `/clients/${id}/import`, requires: "write" },
+  {
+    // A full archive is Owner-only (docs §11), so the section and the form inside
+    // it are Owner-gated. The HTTP route enforces the same rule through
+    // `request_export`, which re-asserts tenant, assignment, audience and consent.
+    key: "export",
+    label: "Экспорт",
+    path: (id) => `/clients/${id}/export`,
+    requires: "owner",
+  },
   { key: "consent", label: "Согласия", path: (id) => `/clients/${id}/consent`, requires: "write" },
   { key: "access", label: "Доступ", path: (id) => `/clients/${id}/access`, requires: "owner" },
 ];
