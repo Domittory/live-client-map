@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as portalConfirm } from "@/app/auth/confirm/route";
 
 /**
- * Portal magic-link confirmation (ticket 15).
+ * Portal magic-link confirmation (ticket 15) and the shared recovery branch
+ * (ticket 17).
  *
  * The route is the only place a portal `token_hash` is redeemed, so its
- * rejection behaviour is pinned here: an expired, reused, tampered or
- * wrong-type token must never produce a session and must send the visitor back
- * to the portal sign-in page with the Russian error message.
+ * rejection behaviour is pinned here: an expired, reused or tampered token must
+ * never produce a session and must send the visitor back to the portal sign-in
+ * page with the Russian error message. A `recovery` token is routed to the
+ * password-reset flow instead of the portal.
  */
 
 const mocks = vi.hoisted(() => ({ verifyOtp: vi.fn() }));
@@ -74,15 +76,15 @@ describe("portal magic-link confirmation", () => {
     );
   });
 
-  it("never redeems a non-magic-link token type", async () => {
+  it("routes a recovery token to the password-reset flow, never the portal", async () => {
+    mocks.verifyOtp.mockResolvedValue({ error: null });
+
     const response = await portalConfirm(
       new Request("https://app.example/auth/confirm?token_hash=abc123&type=recovery")
     );
 
-    expect(mocks.verifyOtp).not.toHaveBeenCalled();
-    expect(response.headers.get("location")).toBe(
-      "https://app.example/portal/login?error=link_invalid"
-    );
+    expect(mocks.verifyOtp).toHaveBeenCalledWith({ type: "recovery", token_hash: "abc123" });
+    expect(response.headers.get("location")).toBe("https://app.example/reset-password");
   });
 
   it("rejects a request without a token", async () => {

@@ -1,32 +1,28 @@
-"use client";
-
 import Link from "next/link";
-import { useActionState } from "react";
-import { resetPassword } from "@/app/actions/auth";
+import { ForgotPasswordForm } from "./forgot-password-form";
 
-export default function ForgotPasswordPage() {
-  const [state, formAction, pending] = useActionState(resetPassword, {
-    sent: false,
-    error: null,
-  });
+/** Error codes the recovery callback or reset form can send back here. */
+const ERROR_MESSAGES: Record<string, string> = {
+  link_invalid:
+    "Ссылка для сброса пароля недействительна, истекла или уже была использована. Запросите новую.",
+};
+
+export default async function ForgotPasswordPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
 
   return (
     <main className="shell">
       <h1>Восстановление пароля</h1>
-      {state.sent ? (
-        <p>Проверьте email — мы отправили ссылку для сброса пароля.</p>
-      ) : (
-        <form action={formAction}>
-          <label>
-            Email
-            <input name="email" type="email" required autoComplete="email" />
-          </label>
-          <button type="submit" disabled={pending}>
-            Отправить ссылку
-          </button>
-          {state.error && <p className="error">{state.error}</p>}
-        </form>
-      )}
+      {error ? (
+        <p className="error" data-testid="forgot-password-error">
+          {ERROR_MESSAGES[error] ?? ERROR_MESSAGES.link_invalid}
+        </p>
+      ) : null}
+      <ForgotPasswordForm />
       <p>
         <Link href="/login">Назад ко входу</Link>
       </p>

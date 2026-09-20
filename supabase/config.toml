@@ -244,6 +244,16 @@ otp_expiry = 3600
 subject = "Ссылка для входа в портал клиента"
 content_path = "./supabase/templates/magic_link.html"
 
+# Password recovery (ticket 17). Same mechanics as the magic link: the email
+# points at the app's own /auth/confirm route, which verifies the single-use
+# token_hash with `verifyOtp({ type: "recovery" })` before any password form is
+# shown. The app passes the allow-listed request origin as `emailRedirectTo`,
+# and the callback path is appended here so the link stays correct even when
+# Supabase rewrites a non-allowlisted origin to `site_url`.
+[auth.email.template.recovery]
+subject = "Сброс пароля"
+content_path = "./supabase/templates/recovery.html"
+
 # Use a production-ready SMTP server
 # [auth.email.smtp]
 # enabled = true

@@ -1,6 +1,13 @@
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const PUBLIC_AUTH_PATHS = ["/login", "/signup", "/auth", "/invite", "/portal/login"] as const;
+const PUBLIC_AUTH_PATHS = [
+  "/login",
+  "/signup",
+  "/auth",
+  "/forgot-password",
+  "/invite",
+  "/portal/login",
+] as const;
 const REDIRECT_PATHS = [
   "/",
   "/access",
