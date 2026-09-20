@@ -157,12 +157,15 @@ describe("service identity verification", () => {
 describe("E2E preflight environment", () => {
   const originalUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const originalPort = process.env.E2E_APP_PORT;
+  const originalRelease = process.env.E2E_RELEASE_ID;
 
   afterEach(() => {
     if (originalUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
     else process.env.NEXT_PUBLIC_SUPABASE_URL = originalUrl;
     if (originalPort === undefined) delete process.env.E2E_APP_PORT;
     else process.env.E2E_APP_PORT = originalPort;
+    if (originalRelease === undefined) delete process.env.E2E_RELEASE_ID;
+    else process.env.E2E_RELEASE_ID = originalRelease;
   });
 
   it("refuses to run against a non-local Supabase host", async () => {
@@ -172,13 +175,44 @@ describe("E2E preflight environment", () => {
     await expect(globalSetup()).rejects.toThrow(/non-local Supabase host/);
   });
 
-  it("accepts the local Supabase environment on a free port", async () => {
-    const released = await listen(net.createServer());
-    await released.close();
+  it("accepts an instance answering with the expected build identity", async () => {
+    // Starting the harness's own webServer is outside a unit test, so stand in
+    // for it: an occupied port is accepted only when the readiness contract
+    // reports the build id this run expects.
+    const server = await listen(
+      foreignService({
+        status: "ok",
+        service: SERVICE_NAME,
+        version: "0.1.0",
+        build: "run-42",
+        database: "ok",
+      })
+    );
+    cleanups.push(server.close);
 
     process.env.NEXT_PUBLIC_SUPABASE_URL = "http://127.0.0.1:54321";
-    process.env.E2E_APP_PORT = String(released.port);
+    process.env.E2E_APP_PORT = String(server.port);
+    process.env.E2E_RELEASE_ID = "run-42";
 
     await expect(globalSetup()).resolves.toBeUndefined();
+  });
+
+  it("refuses an instance that reports a different build", async () => {
+    const server = await listen(
+      foreignService({
+        status: "ok",
+        service: SERVICE_NAME,
+        version: "0.1.0",
+        build: "stale-run",
+        database: "ok",
+      })
+    );
+    cleanups.push(server.close);
+
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "http://127.0.0.1:54321";
+    process.env.E2E_APP_PORT = String(server.port);
+    process.env.E2E_RELEASE_ID = "run-42";
+
+    await expect(globalSetup()).rejects.toThrow(/already in use/);
   });
 });
