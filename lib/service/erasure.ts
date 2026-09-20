@@ -1,21 +1,26 @@
 import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid } from "./validation";
 
 /**
- * Consent revocation and full data erasure (ticket 58, ticket 05 policy).
+ * Consent revocation and full data erasure (ticket 58, ticket 05 policy; made
+ * atomic in ticket 08).
  *
  * The Owner revokes `data_storage` (revokeDataStorage) or runs a full hard
  * delete (executeErasure). Hard delete cascades from the `clients` row; every
  * client-scoped table already carries `on delete cascade`. The audit log is
  * anonymized, not deleted; `legal_hold` defers erasure until cleared.
  *
- * Authorization and audit go through the authenticated client (the owner RPC
- * and append_audit read auth.uid(), which is null under service_role); direct
- * mutations and the erasure RPCs go through the service_role admin client.
+ * Every mutation is one SECURITY DEFINER RPC (migration 0044) invoked through
+ * the authenticated client: the actor comes from auth.uid(), the Owner check,
+ * the legal-hold/consent gates, the audit anonymization, the ai_runs purge and
+ * the client delete commit or roll back together. The service no longer pairs a
+ * mutation with a separate recordAudit() call, and no longer orchestrates the
+ * erasure step by step. The `admin` (service_role) client is used only for the
+ * read-only preview, which must see every child row regardless of RLS.
  */
 
 export const ERASURE_STATUSES = [
@@ -80,12 +85,13 @@ export function opaqueClientRef(clientId: string): string {
 
 /**
  * Client-scoped tables whose `client_id` cascades from `clients` (the exact
- * set from information_schema). `ai_runs` is handled separately (append-only
- * trigger) and `clients` is the deleted row; `relationships` /
- * `relationship_dynamics` are collected via their own keys. Join tables
- * without a `client_id` column (signal_theme_links, theme_core_node_links,
- * trigger_activations, recommendation_targets, correction_targets, …) are not
- * listed here — they cascade through their parent and carry no personal data.
+ * set from information_schema, mirrored by public.erasure_impact_tables() in
+ * migration 0044). `ai_runs` is handled separately (append-only trigger) and
+ * `clients` is the deleted row; `relationships` / `relationship_dynamics` are
+ * collected via their own keys. Join tables without a `client_id` column
+ * (signal_theme_links, theme_core_node_links, trigger_activations,
+ * recommendation_targets, correction_targets, …) are not listed here — they
+ * cascade through their parent and carry no personal data.
  */
 const ERASURE_IMPACT_TABLES = [
   "behavioral_markers",
@@ -161,14 +167,6 @@ async function requireOwner(auth: SupabaseClient, organizationId: string): Promi
   }
 }
 
-async function requireUserId(auth: SupabaseClient): Promise<string> {
-  const {
-    data: { user },
-  } = await auth.auth.getUser();
-  if (!user) throw new ServiceError("UNAUTHORIZED", "Authentication required");
-  return user.id;
-}
-
 async function getRequest(
   admin: SupabaseClient,
   clientRef: string
@@ -180,33 +178,6 @@ async function getRequest(
     .maybeSingle();
   if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to read erasure request");
   return (data as ErasureRequestRow | null) ?? null;
-}
-
-async function upsertRequest(
-  admin: SupabaseClient,
-  organizationId: string,
-  clientRef: string,
-  row: {
-    client_id: string | null;
-    status: ErasureStatus;
-    requested_by: string;
-    started_at?: string | null;
-    blocked_reason?: string | null;
-    impacted_counts?: Record<string, number>;
-  }
-): Promise<ErasureRequestRow> {
-  const { data, error } = await admin
-    .from("erasure_requests")
-    .upsert(
-      { organization_id: organizationId, client_ref: clientRef, ...row },
-      {
-        onConflict: "organization_id,client_ref",
-      }
-    )
-    .select()
-    .single();
-  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to record erasure request");
-  return data as ErasureRequestRow;
 }
 
 /** Collect child-entity ids and per-table counts before any mutation. */
@@ -280,7 +251,11 @@ export async function previewErasure(
   };
 }
 
-/** Set or clear the legal hold that defers erasure. Owner-only. */
+/**
+ * Set or clear the legal hold that defers erasure. Owner-only, one transaction
+ * with its audit row (migration 0044). The client row is locked inside the RPC,
+ * so the decision cannot race a concurrent erasure.
+ */
 export async function setLegalHold(
   auth: SupabaseClient,
   admin: SupabaseClient,
@@ -292,22 +267,22 @@ export async function setLegalHold(
 
   await requireOwner(auth, client.organization_id);
 
-  const { error } = await admin.from("clients").update({ legal_hold: hold }).eq("id", clientId);
-  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to update legal hold");
-
-  await recordAudit(auth, {
-    organizationId: client.organization_id,
-    entityType: "client",
-    entityId: clientId,
-    action: hold ? "client.legal_hold_set" : "client.legal_hold_cleared",
-    after: { legal_hold: hold },
-  });
+  await runAtomicRpc(
+    auth,
+    "set_client_legal_hold",
+    { p_client_id: clientId, p_hold: hold },
+    {
+      forbidden: "Only the organization owner can manage the legal hold",
+      failure: "Failed to update legal hold",
+    }
+  );
 }
 
 /**
  * Revoke `data_storage` — the trigger that initiates the erasure procedure
- * (ticket 05). Records a `requested` erasure request; full deletion runs via
- * executeErasure. Idempotent: never downgrades an existing terminal request.
+ * (ticket 05). The consent revocation and the `requested` erasure request are
+ * recorded in one transaction; full deletion runs via executeErasure.
+ * Idempotent: never downgrades an existing terminal request.
  */
 export async function revokeDataStorage(
   auth: SupabaseClient,
@@ -319,35 +294,24 @@ export async function revokeDataStorage(
 
   await requireOwner(auth, client.organization_id);
 
-  const now = new Date().toISOString();
-  const { error } = await admin
-    .from("consent_records")
-    .update({ revoked_at: now })
-    .eq("client_id", clientId)
-    .eq("consent_type", "data_storage")
-    .is("revoked_at", null);
-  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to revoke data_storage consent");
-
-  const clientRef = opaqueClientRef(clientId);
-  const existing = await getRequest(admin, clientRef);
-  if (existing?.status === "completed" || existing?.status === "blocked") {
-    return existing.id;
-  }
-
-  const userId = await requireUserId(auth);
-  const request = await upsertRequest(admin, client.organization_id, clientRef, {
-    client_id: clientId,
-    status: "requested",
-    requested_by: userId,
-  });
-  return request.id;
+  const result = await runAtomicRpc<{ erasure_request_id: string }>(
+    auth,
+    "request_client_erasure",
+    { p_client_id: clientId },
+    {
+      forbidden: "Only the organization owner can manage erasure",
+      failure: "Failed to record the erasure request",
+    }
+  );
+  return result.erasure_request_id;
 }
 
 /**
- * Execute the full erasure. Idempotent: every step is a no-op if already
- * applied, so a retry after a partial failure resumes instead of redoing or
- * erroring. Returns `blocked` when legal_hold is set and `already_completed`
- * when the client is already gone.
+ * Execute the full erasure inside one RPC. Idempotent and recoverable: a
+ * completed request is never re-run, a legal hold returns `blocked` before
+ * anything irreversible happens, and a request whose client is already gone is
+ * finalized instead of failing. A failed attempt leaves no partial deletion —
+ * the whole transaction rolled back, including the anonymized audit rows.
  */
 export async function executeErasure(
   auth: SupabaseClient,
@@ -358,150 +322,29 @@ export async function executeErasure(
   const client = await loadClient(admin, clientId);
   const existing = await getRequest(admin, clientRef);
 
-  const organizationId = client?.organization_id ?? existing?.organization_id;
-  if (!organizationId) throw new ServiceError("NOT_FOUND", "Client not found");
+  // Keep the NOT_FOUND contract: the RPC would otherwise report a validation
+  // error for an unknown client id.
+  if (!client && !existing) throw new ServiceError("NOT_FOUND", "Client not found");
 
-  await requireOwner(auth, organizationId);
-
-  if (existing?.status === "completed") {
-    return {
-      status: "already_completed",
-      erasureRequestId: existing.id,
-      clientRef,
-      impacted: existing.impacted_counts ?? {},
-    };
-  }
-
-  // Client already hard-deleted (a prior run reached the delete but failed to
-  // finalize): finish the bookkeeping and report already_completed.
-  if (!client) {
-    if (!existing) throw new ServiceError("NOT_FOUND", "Client not found");
-    const completedAt = new Date().toISOString();
-    await admin
-      .from("erasure_requests")
-      .update({ status: "completed", completed_at: completedAt })
-      .eq("id", existing.id);
-    await recordAudit(auth, {
-      organizationId,
-      entityType: "erasure_request",
-      entityId: existing.id,
-      action: "client.erasure_completed",
-      after: { client_ref: clientRef, completed_at: completedAt },
-    });
-    return {
-      status: "already_completed",
-      erasureRequestId: existing.id,
-      clientRef,
-      impacted: existing.impacted_counts ?? {},
-    };
-  }
-
-  const userId = await requireUserId(auth);
-
-  if (client.legal_hold) {
-    const request = await upsertRequest(admin, organizationId, clientRef, {
-      client_id: clientId,
-      status: "blocked",
-      requested_by: userId,
-      started_at: null,
-      blocked_reason: "legal_hold",
-    });
-    await recordAudit(auth, {
-      organizationId,
-      entityType: "client",
-      entityId: clientId,
-      action: "client.erasure_blocked",
-      after: { legal_hold: true },
-    });
-    return {
-      status: "blocked",
-      erasureRequestId: request.id,
-      clientRef,
-      impacted: {},
-    };
-  }
-
-  // Collect ids BEFORE any mutation — they are needed to anonymize the child
-  // audit rows that survive the cascade.
-  const impact = await collectImpact(admin, clientId);
-  const impacted = impact.impacted;
-  const entityIds = [clientId, ...impact.entityIds];
-
-  const request = await upsertRequest(admin, organizationId, clientRef, {
-    client_id: clientId,
-    status: "in_progress",
-    requested_by: userId,
-    started_at: new Date().toISOString(),
-    blocked_reason: null,
-    impacted_counts: impacted,
-  });
-
-  await recordAudit(auth, {
-    organizationId,
-    entityType: "client",
-    entityId: clientId,
-    action: "client.erasure_requested",
-    after: { client_ref: clientRef, impacted },
-  });
-
-  try {
-    // Revoke every consent — this immediately blocks AI/portal/supervisor
-    // through the existing consent gates.
-    const revokedAt = new Date().toISOString();
-    const consentResult = await admin
-      .from("consent_records")
-      .update({ revoked_at: revokedAt })
-      .eq("client_id", clientId)
-      .is("revoked_at", null);
-    if (consentResult.error) {
-      throw new ServiceError("INTERNAL_ERROR", "Failed to revoke consents");
+  const result = await runAtomicRpc<{
+    status: "completed" | "blocked" | "already_completed";
+    erasure_request_id: string;
+    client_ref: string;
+    impacted: Record<string, number>;
+  }>(
+    auth,
+    "execute_client_erasure",
+    { p_client_id: clientId },
+    {
+      forbidden: "Only the organization owner can manage erasure",
+      failure: "Failed to execute erasure",
     }
+  );
 
-    // Anonymize the audit trail for this client and its child entities.
-    await admin.rpc("anonymize_client_audit", { p_client_id: clientId, p_entity_ids: entityIds });
-
-    // Purge ai_runs first: its append-only trigger would otherwise abort the
-    // cascade that the client delete performs.
-    await admin.rpc("purge_client_ai_runs", { p_client_id: clientId });
-
-    // Hard delete the client; every client-scoped table cascades.
-    const { error: deleteError } = await admin.from("clients").delete().eq("id", clientId);
-    if (deleteError) throw new ServiceError("INTERNAL_ERROR", "Failed to delete client");
-
-    const completedAt = new Date().toISOString();
-    const backupMarker = {
-      policy: "30_day_rotation",
-      tombstone_required: true,
-      erased_at: completedAt,
-      client_ref: clientRef,
-      organization_id: organizationId,
-      impacted_counts: impacted,
-    };
-    await admin
-      .from("erasure_requests")
-      .update({ status: "completed", completed_at: completedAt, backup_marker: backupMarker })
-      .eq("id", request.id);
-
-    await recordAudit(auth, {
-      organizationId,
-      entityType: "erasure_request",
-      entityId: request.id,
-      action: "client.erasure_completed",
-      after: { client_ref: clientRef, impacted, completed_at: completedAt },
-    });
-
-    return { status: "completed", erasureRequestId: request.id, clientRef, impacted };
-  } catch (err) {
-    // Mark the attempt failed but leave the partial state for an idempotent
-    // retry to resume.
-    await admin
-      .from("erasure_requests")
-      .update({ status: "failed", failed_at: new Date().toISOString() })
-      .eq("id", request.id)
-      .then(
-        () => undefined,
-        () => undefined
-      );
-    throw err;
-  }
+  return {
+    status: result.status,
+    erasureRequestId: result.erasure_request_id,
+    clientRef: result.client_ref,
+    impacted: result.impacted ?? {},
+  };
 }

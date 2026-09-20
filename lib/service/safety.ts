@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit } from "./audit";
-import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /**
@@ -129,39 +128,31 @@ export const createSafetyReviewSchema = z
   })
   .strict();
 
+/**
+ * Create a human safety review. The control row and its AuditLog entry are one
+ * atomic RPC (migration 0044): a review can never exist without the audit trail
+ * that records who raised it.
+ */
 export async function createSafetyReview(
   client: SupabaseClient,
   rawInput: unknown
 ): Promise<string> {
   const input = validate(createSafetyReviewSchema, rawInput);
-  const {
-    data: { user },
-  } = await client.auth.getUser();
 
-  const { data, error } = await client
-    .from("safety_reviews")
-    .insert({
-      organization_id: input.organizationId,
-      client_id: input.clientId,
-      category: input.category,
-      severity: input.severity,
-      source: input.source ?? null,
-      created_by: user?.id ?? null,
-    })
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No access to create a safety review for this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create safety review");
-  }
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "safety_review",
-    entityId: data.id,
-    action: "safety_review.create",
-    after: { category: input.category, severity: input.severity },
-  });
-  return data.id;
+  return runAtomicRpc<string>(
+    client,
+    "create_safety_review",
+    {
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_category: input.category,
+      p_severity: input.severity,
+      p_source: input.source ?? null,
+    },
+    {
+      forbidden: "No access to create a safety review for this client",
+      validation: "Invalid safety review payload",
+      failure: "Failed to create safety review",
+    }
+  );
 }

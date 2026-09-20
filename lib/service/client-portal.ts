@@ -1,8 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit } from "./audit";
 import { requireConsent } from "./consent";
 import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /**
@@ -44,44 +44,29 @@ export const portalOverviewQuerySchema = z
   })
   .strict();
 
+/**
+ * Grant (or re-activate) a portal identity. The `client_portal` consent is
+ * checked as an informative first gate here and re-checked inside the atomic
+ * RPC (migration 0044), which also appends the audit row in the same
+ * transaction.
+ */
 export async function createPortalUser(client: SupabaseClient, rawInput: unknown): Promise<string> {
   const input = validate(createPortalUserSchema, rawInput);
   await requireConsent(client, input.clientId, "client_portal");
 
-  const {
-    data: { user },
-  } = await client.auth.getUser();
-
-  const { data, error } = await client
-    .from("client_portal_users")
-    .upsert(
-      {
-        client_id: input.clientId,
-        email: input.email,
-        status: "active",
-        revoked_at: null,
-        created_by: user?.id ?? null,
-      },
-      { onConflict: "client_id,email" }
-    )
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No access to manage this client's portal");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create portal user");
-  }
-
-  await recordAudit(client, {
-    organizationId: await clientOrg(client, input.clientId),
-    entityType: "client_portal_user",
-    entityId: data.id,
-    action: "portal.access_granted",
-    after: { client_id: input.clientId, email: input.email },
-  });
-  return data.id;
+  return runAtomicRpc<string>(
+    client,
+    "create_portal_user",
+    { p_client_id: input.clientId, p_email: input.email },
+    {
+      forbidden: "No access to manage this client's portal",
+      validation: "Invalid portal user payload",
+      failure: "Failed to create portal user",
+    }
+  );
 }
 
+/** Revoke a portal identity and its audit row in one transaction. */
 export async function revokePortalUser(
   client: SupabaseClient,
   portalUserId: string
@@ -93,19 +78,15 @@ export async function revokePortalUser(
     .maybeSingle();
   if (!row) throw new ServiceError("NOT_FOUND", "Portal user not found");
 
-  const { error } = await client
-    .from("client_portal_users")
-    .update({ status: "revoked", revoked_at: new Date().toISOString() })
-    .eq("id", portalUserId);
-  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to revoke portal user");
-
-  await recordAudit(client, {
-    organizationId: await clientOrg(client, (row as { client_id: string }).client_id),
-    entityType: "client_portal_user",
-    entityId: portalUserId,
-    action: "portal.access_revoked",
-    after: { status: "revoked" },
-  });
+  await runAtomicRpc<boolean>(
+    client,
+    "revoke_portal_user",
+    { p_portal_user_id: portalUserId },
+    {
+      forbidden: "No access to manage this client's portal",
+      failure: "Failed to revoke portal user",
+    }
+  );
 }
 
 /** Map a portal user's email to their active client_id (null when revoked). */
@@ -163,13 +144,4 @@ export async function getClientPortal(
     clientVisibleRecommendations: (recommendations.data ??
       []) as ClientPortalOverview["clientVisibleRecommendations"],
   };
-}
-
-async function clientOrg(client: SupabaseClient, clientId: string): Promise<string> {
-  const { data } = await client
-    .from("clients")
-    .select("organization_id")
-    .eq("id", clientId)
-    .maybeSingle();
-  return (data as { organization_id: string }).organization_id;
 }

@@ -58,8 +58,10 @@ $$;
 
 -- Fault injection is attached to every table an atomic mutation writes to, so a
 -- test can force a failure at the intermediate write (the domain row) and at the
--- final audit append. BEFORE INSERT OR UPDATE keeps the fault visible for both
--- create and update paths.
+-- final audit append. BEFORE INSERT OR UPDATE OR DELETE keeps the fault visible
+-- for create, update and hard-delete paths — the erasure transaction needs the
+-- DELETE coverage on `clients` and `ai_runs` to prove that a failure at the
+-- irreversible stage rolls the anonymized audit back too.
 do $$
 declare
   v_table text;
@@ -106,11 +108,17 @@ begin
     -- core_nodes is already covered by ticket 06 and is updated by the
     -- reactivation decision.
     'core_node_reactivations',
-    'audit_log'
+    'audit_log',
+    -- Ticket 08: privileged and erasure flows. `erasure_requests` and
+    -- `ai_runs` (deleted by the erasure purge) plus the access/safety controls.
+    'erasure_requests',
+    'ai_runs',
+    'safety_reviews',
+    'client_portal_users'
   ]
   loop
     execute format(
-      'create trigger test_fault_%1$s before insert or update on public.%1$I
+      'create trigger test_fault_%1$s before insert or update or delete on public.%1$I
          for each row execute procedure test_support.inject_fault()',
       v_table
     );
