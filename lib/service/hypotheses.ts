@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import { ServiceError } from "./errors";
 import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
@@ -64,6 +65,47 @@ export async function addContradiction(
     {
       forbidden: "No write access to this client",
       failure: "Failed to record contradiction",
+    }
+  );
+}
+
+export const HYPOTHESIS_REVIEW_ACTIONS = ["approve", "reject"] as const;
+export type HypothesisReviewAction = (typeof HYPOTHESIS_REVIEW_ACTIONS)[number];
+
+/**
+ * Human review of a competing DifferentialHypothesis (ticket 12). Approving
+ * confirms one explanation without removing the competing hypotheses or their
+ * contradicting evidence; only a not-yet-reviewed hypothesis can be decided, so
+ * a confirmed one is never silently changed. A rejection requires a reason.
+ */
+export async function reviewHypothesis(
+  client: SupabaseClient,
+  organizationId: string,
+  hypothesisId: string,
+  action: HypothesisReviewAction,
+  reason?: string
+): Promise<void> {
+  if (!(HYPOTHESIS_REVIEW_ACTIONS as readonly string[]).includes(action)) {
+    throw new ServiceError("VALIDATION_ERROR", "Unknown hypothesis review action");
+  }
+  if (action === "reject" && !reason?.trim()) {
+    throw new ServiceError("VALIDATION_ERROR", "Rejecting a hypothesis requires an audit reason");
+  }
+
+  await runAtomicRpc<void>(
+    client,
+    "review_hypothesis",
+    {
+      p_org_id: organizationId,
+      p_hypothesis_id: hypothesisId,
+      p_decision: action,
+      p_reason: reason?.trim() || null,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to review hypothesis",
+      validation: "Rejecting a hypothesis requires an audit reason",
+      conflict: "Hypothesis was already reviewed",
     }
   );
 }

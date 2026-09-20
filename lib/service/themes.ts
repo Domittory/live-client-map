@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import { ServiceError } from "./errors";
 import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
@@ -112,6 +113,48 @@ export async function recomputeThemeAggregates(
     {
       forbidden: "No write access to this client",
       failure: "Failed to recompute theme aggregates",
+    }
+  );
+}
+
+export const THEME_REVIEW_ACTIONS = ["approve", "reject"] as const;
+export type ThemeReviewAction = (typeof THEME_REVIEW_ACTIONS)[number];
+
+/**
+ * Human review of an AI-proposed Theme (ticket 12). The decision is explicit and
+ * atomic: only a `pending` theme can be reviewed, the actor is resolved from the
+ * session, and rejecting an evidence-bearing proposal requires a reason that is
+ * stored in the audit row. A confirmed theme is never silently changed by a
+ * repeated review call (the RPC rejects a second decision).
+ */
+export async function reviewTheme(
+  client: SupabaseClient,
+  organizationId: string,
+  themeId: string,
+  action: ThemeReviewAction,
+  reason?: string
+): Promise<void> {
+  if (!(THEME_REVIEW_ACTIONS as readonly string[]).includes(action)) {
+    throw new ServiceError("VALIDATION_ERROR", "Unknown theme review action");
+  }
+  if (action === "reject" && !reason?.trim()) {
+    throw new ServiceError("VALIDATION_ERROR", "Rejecting a theme requires an audit reason");
+  }
+
+  await runAtomicRpc<void>(
+    client,
+    "review_theme",
+    {
+      p_org_id: organizationId,
+      p_theme_id: themeId,
+      p_decision: action,
+      p_reason: reason?.trim() || null,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to review theme",
+      validation: "Rejecting a theme requires an audit reason",
+      conflict: "Theme was already reviewed",
     }
   );
 }
