@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /** Ticket 05 retention policy bounds; audit/backup periods are fixed. */
@@ -123,56 +123,35 @@ export async function transferOwnership(client: SupabaseClient, rawInput: unknow
   if (error) throw mapRpcError(error, "Failed to transfer ownership");
 }
 
-/** Owner updates org name and/or retention settings; audited (ticket 14). */
+/**
+ * Owner updates org name and/or retention settings. The change and its audit row
+ * are one atomic RPC (ticket 04); the retention bounds stay enforced by the
+ * database CHECK constraint (SQLSTATE 23514).
+ */
 export async function updateOrgSettings(client: SupabaseClient, rawInput: unknown): Promise<void> {
   const input = validate(updateOrgSettingsSchema, rawInput);
 
-  const { data: org } = await client
-    .from("organizations")
-    .select("id, name, settings")
-    .eq("id", input.organizationId)
-    .maybeSingle();
-  if (!org) throw new ServiceError("FORBIDDEN", "Only the organization owner can edit settings");
+  const retention = input.retention
+    ? {
+        client_data_years: input.retention.clientDataYears,
+        export_days: input.retention.exportDays,
+      }
+    : null;
 
-  const settings = {
-    ...(org.settings as Record<string, unknown>),
-    ...(input.retention
-      ? {
-          retention: {
-            client_data_years: input.retention.clientDataYears,
-            export_days: input.retention.exportDays,
-          },
-        }
-      : {}),
-  };
-
-  const { data, error } = await client
-    .from("organizations")
-    .update({
-      ...(input.name ? { name: input.name } : {}),
-      settings,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", input.organizationId)
-    .select("id");
-  if (error) {
-    if (error.code === "23514") {
-      throw new ServiceError("VALIDATION_ERROR", "Retention settings violate the policy");
+  await runAtomicRpc<void>(
+    client,
+    "update_organization_settings",
+    {
+      p_org_id: input.organizationId,
+      p_name: input.name ?? null,
+      p_retention: retention,
+    },
+    {
+      forbidden: "Only the organization owner can edit settings",
+      failure: "Failed to update organization settings",
+      validation: "Retention settings violate the policy",
     }
-    throw new ServiceError("INTERNAL_ERROR", "Failed to update organization settings");
-  }
-  if (!data || data.length === 0) {
-    throw new ServiceError("FORBIDDEN", "Only the organization owner can edit settings");
-  }
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "organization",
-    entityId: input.organizationId,
-    action: "organization.update_settings",
-    before: { name: org.name, settings: org.settings },
-    after: { name: input.name ?? org.name, settings },
-  });
+  );
 }
 
 export interface AdminMember {

@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import type { Tables } from "@/lib/supabase/database.types";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
 import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
@@ -75,38 +74,43 @@ export async function getClient(client: SupabaseClient, id: string): Promise<Cli
   return (data ?? null) as ClientRow | null;
 }
 
+/**
+ * Client update and its AuditLog row are one atomic RPC (ticket 04): the patch
+ * is whitelisted inside update_client(), which also revalidates tenant and write
+ * assignment. The public camel-case input stays unchanged.
+ */
 export async function updateClient(
   client: SupabaseClient,
   organizationId: string,
   rawInput: unknown
 ): Promise<void> {
   const input = validate(updateClientSchema, rawInput);
-  const dbFields: Record<string, unknown> = {};
-  if (input.displayName !== undefined) dbFields.display_name = input.displayName;
-  if (input.firstName !== undefined) dbFields.first_name = input.firstName;
-  if (input.lastName !== undefined) dbFields.last_name = input.lastName;
-  if (input.occupation !== undefined) dbFields.occupation = input.occupation;
+  const patch: Record<string, unknown> = {};
+  if (input.displayName !== undefined) patch.display_name = input.displayName;
+  if (input.firstName !== undefined) patch.first_name = input.firstName;
+  if (input.lastName !== undefined) patch.last_name = input.lastName;
+  if (input.occupation !== undefined) patch.occupation = input.occupation;
   if (input.specialistNotesPrivate !== undefined) {
-    dbFields.specialist_notes_private = input.specialistNotesPrivate;
+    patch.specialist_notes_private = input.specialistNotesPrivate;
   }
   if (input.clientVisibleNotes !== undefined) {
-    dbFields.client_visible_notes = input.clientVisibleNotes;
+    patch.client_visible_notes = input.clientVisibleNotes;
   }
 
-  const { error } = await client.from("clients").update(dbFields).eq("id", input.id);
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to update client");
+  if (Object.keys(patch).length === 0) {
+    throw new ServiceError("VALIDATION_ERROR", "No fields to update");
   }
 
-  await recordAudit(client, {
-    organizationId,
-    entityType: "client",
-    entityId: input.id,
-    action: "client.updated",
-    after: dbFields,
-  });
+  await runAtomicRpc<void>(
+    client,
+    "update_client",
+    { p_client_id: input.id, p_org_id: organizationId, p_patch: patch },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to update client",
+      validation: "Invalid client update",
+    }
+  );
 }
 
 export async function archiveClient(
@@ -114,22 +118,16 @@ export async function archiveClient(
   organizationId: string,
   id: string
 ): Promise<void> {
-  const { error } = await client
-    .from("clients")
-    .update({ status: "archived", archived_at: new Date().toISOString() })
-    .eq("id", id);
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to archive client");
-  }
-
-  await recordAudit(client, {
-    organizationId,
-    entityType: "client",
-    entityId: id,
-    action: "client.archived",
-  });
+  await runAtomicRpc<void>(
+    client,
+    "archive_client",
+    { p_client_id: id, p_org_id: organizationId },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to archive client",
+      validation: "Client not found in this organization",
+    }
+  );
 }
 
 /** Client-visible projection: private specialist notes are never included. */

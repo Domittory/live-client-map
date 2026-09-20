@@ -18,6 +18,9 @@ create schema if not exists test_support;
 
 create table test_support.faults (
   id uuid primary key default gen_random_uuid(),
+  -- Identifies the test connection that registered the fault, so clearing one
+  -- suite's faults can never wipe a fault another parallel suite is using.
+  owner text not null,
   point text not null,
   marker text not null,
   created_at timestamptz not null default now()
@@ -53,10 +56,29 @@ begin
 end;
 $$;
 
-create trigger test_fault_client_assignments
-  before insert on public.client_assignments
-  for each row execute procedure test_support.inject_fault();
-
-create trigger test_fault_audit_log
-  before insert on public.audit_log
-  for each row execute procedure test_support.inject_fault();
+-- Fault injection is attached to every table an atomic mutation writes to, so a
+-- test can force a failure at the intermediate write (the domain row) and at the
+-- final audit append. BEFORE INSERT OR UPDATE keeps the fault visible for both
+-- create and update paths.
+do $$
+declare
+  v_table text;
+begin
+  foreach v_table in array array[
+    'clients',
+    'client_assignments',
+    'consent_records',
+    'organizations',
+    'organization_members',
+    'organization_invitations',
+    'audit_log'
+  ]
+  loop
+    execute format(
+      'create trigger test_fault_%1$s before insert or update on public.%1$I
+         for each row execute procedure test_support.inject_fault()',
+      v_table
+    );
+  end loop;
+end;
+$$;

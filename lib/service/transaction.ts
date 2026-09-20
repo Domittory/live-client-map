@@ -25,6 +25,10 @@ export interface AtomicRpcMessages {
   forbidden: string;
   /** Shown for any other database failure. Never leaks the raw RPC error. */
   failure: string;
+  /** Shown for a domain validation rejection (SQLSTATE 22023 / 23514). */
+  validation?: string;
+  /** Shown for a uniqueness/state conflict (SQLSTATE 23505). */
+  conflict?: string;
 }
 
 /**
@@ -44,6 +48,12 @@ export async function runAtomicRpc<T>(
     // guards inside the RPC.
     if (error.code === "42501") {
       throw new ServiceError("FORBIDDEN", messages.forbidden);
+    }
+    if (error.code === "22023" || error.code === "23514") {
+      throw new ServiceError("VALIDATION_ERROR", messages.validation ?? messages.failure);
+    }
+    if (error.code === "23505") {
+      throw new ServiceError("CONFLICT", messages.conflict ?? messages.failure);
     }
     throw new ServiceError("INTERNAL_ERROR", messages.failure);
   }

@@ -1,7 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { Client as PgClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createClient as createClientService } from "@/lib/service/clients";
+import { connectFaultInjection, type FaultInjection } from "./support/fault-injection";
 
 try {
   process.loadEnvFile(".env.local");
@@ -13,10 +13,6 @@ const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const available = Boolean(url && anonKey && serviceKey);
-
-/** Local Supabase default; overridden by SUPABASE_DB_URL when set. */
-const dbUrl =
-  process.env.SUPABASE_DB_URL ?? "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
 
 /**
  * Ticket 01: the exemplary atomic business mutation (create_client) must commit
@@ -32,8 +28,7 @@ describe.skipIf(!available)("atomic business mutation pattern (ticket 01)", () =
     auth: { autoRefreshToken: false, persistSession: false },
   });
   const createdUserIds: string[] = [];
-  let pg: PgClient | null = null;
-  let faultsAvailable = false;
+  let faults: FaultInjection;
   let orgId: string;
   let specialist: { id: string; client: SupabaseClient };
 
@@ -55,18 +50,6 @@ describe.skipIf(!available)("atomic business mutation pattern (ticket 01)", () =
     const client = anonClient();
     await client.auth.signInWithPassword({ email, password: "password123" });
     return { id: data.user!.id, client };
-  }
-
-  /** Register a fault for `point`; only rows containing `marker` are affected. */
-  async function registerFault(point: string, marker: string): Promise<void> {
-    await pg!.query("insert into test_support.faults (point, marker) values ($1, $2)", [
-      point,
-      marker,
-    ]);
-  }
-
-  async function clearFaults(): Promise<void> {
-    await pg?.query("delete from test_support.faults");
   }
 
   async function clientsNamed(displayName: string): Promise<string[]> {
@@ -91,16 +74,7 @@ describe.skipIf(!available)("atomic business mutation pattern (ticket 01)", () =
   }
 
   beforeAll(async () => {
-    try {
-      pg = new PgClient({ connectionString: dbUrl });
-      await pg.connect();
-      await pg.query("select 1 from test_support.faults limit 1");
-      faultsAvailable = true;
-    } catch {
-      faultsAvailable = false;
-      await pg?.end().catch(() => undefined);
-      pg = null;
-    }
+    faults = await connectFaultInjection();
 
     const owner = await createUser(`atomic-owner-${crypto.randomUUID()}@example.com`);
     const { data: org } = await owner.client.rpc("create_organization", {
@@ -118,8 +92,8 @@ describe.skipIf(!available)("atomic business mutation pattern (ticket 01)", () =
   });
 
   afterAll(async () => {
-    await clearFaults();
-    await pg?.end().catch(() => undefined);
+    await faults?.clear();
+    await faults?.close();
     for (const id of createdUserIds) {
       await admin.auth.admin.deleteUser(id);
     }
@@ -149,18 +123,18 @@ describe.skipIf(!available)("atomic business mutation pattern (ticket 01)", () =
   });
 
   it("rolls back the client when the child-row insert fails", async (ctx) => {
-    if (!faultsAvailable) return ctx.skip();
+    if (!faults.available) return ctx.skip();
     const displayName = `atomic-child-${crypto.randomUUID()}`;
 
     // The marker is the specialist id, so only this test's assignment insert is
     // affected even while other integration files run in parallel.
-    await registerFault("client_assignments", specialist.id);
+    await faults.register("client_assignments", specialist.id);
     try {
       await expect(
         createClientService(specialist.client, { organizationId: orgId, displayName })
       ).rejects.toThrow();
     } finally {
-      await clearFaults();
+      await faults.clear();
     }
 
     expect(await clientsNamed(displayName)).toHaveLength(0);
@@ -168,16 +142,16 @@ describe.skipIf(!available)("atomic business mutation pattern (ticket 01)", () =
   });
 
   it("rolls back client and assignment when the audit append fails", async (ctx) => {
-    if (!faultsAvailable) return ctx.skip();
+    if (!faults.available) return ctx.skip();
     const displayName = `atomic-audit-${crypto.randomUUID()}`;
 
-    await registerFault("audit_log", specialist.id);
+    await faults.register("audit_log", specialist.id);
     try {
       await expect(
         createClientService(specialist.client, { organizationId: orgId, displayName })
       ).rejects.toThrow();
     } finally {
-      await clearFaults();
+      await faults.clear();
     }
 
     expect(await clientsNamed(displayName)).toHaveLength(0);
@@ -185,11 +159,11 @@ describe.skipIf(!available)("atomic business mutation pattern (ticket 01)", () =
   });
 
   it("leaves the mutation working again once the fault is cleared", async (ctx) => {
-    if (!faultsAvailable) return ctx.skip();
+    if (!faults.available) return ctx.skip();
     const displayName = `atomic-after-${crypto.randomUUID()}`;
 
-    await registerFault("audit_log", specialist.id);
-    await clearFaults();
+    await faults.register("audit_log", specialist.id);
+    await faults.clear();
 
     const clientId = await createClientService(specialist.client, {
       organizationId: orgId,

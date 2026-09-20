@@ -2,7 +2,6 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { recordAudit } from "@/lib/service/audit";
 
 export type ConsentState = { error: string | null };
 
@@ -44,15 +43,6 @@ export async function grantConsent(_prev: ConsentState, formData: FormData): Pro
   });
   if (error) return { error: error.message };
 
-  await recordAudit(supabase, {
-    organizationId: orgId,
-    entityType: "consent_record",
-    entityId: clientId,
-    action: "consent.granted",
-    after: { consent_type: type, document_version: docVersion },
-    reason: "consent granted",
-  });
-
   revalidatePath("/consent");
   return { error: null };
 }
@@ -76,15 +66,6 @@ export async function revokeConsent(
     p_consent_type: type,
   });
   if (error) return { error: error.message };
-
-  await recordAudit(supabase, {
-    organizationId: orgId,
-    entityType: "consent_record",
-    entityId: clientId,
-    action: "consent.revoked",
-    after: { consent_type: type },
-    reason: "consent revoked",
-  });
 
   revalidatePath("/consent");
   return { error: null };
