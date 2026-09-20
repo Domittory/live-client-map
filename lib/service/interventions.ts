@@ -1,8 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit, withAudit } from "./audit";
 import { ServiceError } from "./errors";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /** intervention_methods (migration 0014); system rows have organization_id = null. */
@@ -60,19 +60,6 @@ async function requireUserId(client: SupabaseClient): Promise<string> {
   return user.id;
 }
 
-function mapWriteError(error: { code?: string }, fallback: string): ServiceError {
-  if (error.code === "42501") {
-    return new ServiceError(
-      "FORBIDDEN",
-      "Only active owners/specialists of the organization can modify methods"
-    );
-  }
-  if (error.code === "23505") {
-    return new ServiceError("CONFLICT", "Method name already exists in this scope");
-  }
-  return new ServiceError("INTERNAL_ERROR", fallback);
-}
-
 /** List/search the method catalog (system + own org, per RLS). */
 export async function listMethods(
   client: SupabaseClient,
@@ -122,32 +109,29 @@ export async function createOrgMethod(
   rawInput: unknown
 ): Promise<InterventionMethod> {
   const input = validate(createOrgMethodSchema, rawInput);
-  const userId = await requireUserId(client);
+  await requireUserId(client);
 
-  const { data, error } = await client
-    .from("intervention_methods")
-    .insert({
-      organization_id: input.organizationId,
-      name: input.name,
-      description: input.description ?? null,
-      category: input.category ?? null,
-      contraindications: input.contraindications,
-      default_follow_up_days: input.defaultFollowUpDays ?? null,
-      is_system: false,
-      created_by: userId,
-    })
-    .select()
-    .single();
-  if (error) throw mapWriteError(error, "Failed to create intervention method");
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "intervention_method",
-    entityId: (data as InterventionMethod).id,
-    action: "intervention_method.create",
-    after: data,
-  });
-  return data as InterventionMethod;
+  // The method row and its audit entry commit together; the RPC re-asserts the
+  // owner/specialist role required by the library RLS policy.
+  return runAtomicRpc<InterventionMethod>(
+    client,
+    "create_org_method",
+    {
+      p_org_id: input.organizationId,
+      p_payload: {
+        name: input.name,
+        description: input.description ?? null,
+        category: input.category ?? null,
+        contraindications: input.contraindications,
+        default_follow_up_days: input.defaultFollowUpDays ?? null,
+      },
+    },
+    {
+      forbidden: "Only active owners/specialists of the organization can modify methods",
+      failure: "Failed to create intervention method",
+      conflict: "Method name already exists in this scope",
+    }
+  );
 }
 
 export async function updateOrgMethod(
@@ -174,35 +158,18 @@ export async function updateOrgMethod(
     ...(input.defaultFollowUpDays !== undefined
       ? { default_follow_up_days: input.defaultFollowUpDays }
       : {}),
-    updated_at: new Date().toISOString(),
   };
 
-  const updated = await withAudit(
+  return runAtomicRpc<InterventionMethod>(
     client,
+    "update_org_method",
+    { p_method_id: before.id, p_patch: patch },
     {
-      organizationId: before.organization_id,
-      entityType: "intervention_method",
-      entityId: before.id,
-      action: "intervention_method.update",
-      before,
-      after: { ...before, ...patch },
-    },
-    async () => {
-      const { data, error } = await client
-        .from("intervention_methods")
-        .update(patch)
-        .eq("id", before.id)
-        .eq("is_system", false)
-        .is("archived_at", null)
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to update intervention method");
-      if (!data)
-        throw new ServiceError("NOT_FOUND", "Intervention method not found or not editable");
-      return data as InterventionMethod;
+      forbidden: "Only active owners/specialists of the organization can modify methods",
+      failure: "Failed to update intervention method",
+      conflict: "Archived methods cannot be edited",
     }
   );
-  return updated;
 }
 
 /** Soft delete (ticket 03): archived methods stay readable for old Corrections. */
@@ -213,29 +180,13 @@ export async function archiveOrgMethod(client: SupabaseClient, methodId: string)
   }
   if (before.archived_at !== null) return;
 
-  const archivedAt = new Date().toISOString();
-  await withAudit(
+  await runAtomicRpc<void>(
     client,
+    "archive_org_method",
+    { p_method_id: before.id },
     {
-      organizationId: before.organization_id,
-      entityType: "intervention_method",
-      entityId: before.id,
-      action: "intervention_method.archive",
-      before,
-      after: { ...before, archived_at: archivedAt },
-    },
-    async () => {
-      const { data, error } = await client
-        .from("intervention_methods")
-        .update({ archived_at: archivedAt })
-        .eq("id", before.id)
-        .eq("is_system", false)
-        .is("archived_at", null)
-        .select("id");
-      if (error) throw mapWriteError(error, "Failed to archive intervention method");
-      if (!data || data.length === 0) {
-        throw new ServiceError("NOT_FOUND", "Intervention method not found or not editable");
-      }
+      forbidden: "Only active owners/specialists of the organization can modify methods",
+      failure: "Failed to archive intervention method",
     }
   );
 }

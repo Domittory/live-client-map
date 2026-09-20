@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 export const createCoreNodeSchema = z
@@ -66,72 +66,59 @@ export async function getCoreNode(client: SupabaseClient, nodeId: string): Promi
   return data as CoreNode;
 }
 
+/**
+ * Create a CoreNode as a working hypothesis (never a confirmed entity) and its
+ * AuditLog row in one transaction.
+ */
 export async function createCoreNode(
   client: SupabaseClient,
   organizationId: string,
   rawInput: unknown
 ): Promise<string> {
   const input = validate(createCoreNodeSchema, rawInput);
-  const {
-    data: { user },
-  } = await client.auth.getUser();
 
-  const { data, error } = await client
-    .from("core_nodes")
-    .insert({
-      organization_id: organizationId,
-      client_id: input.clientId,
-      title: input.title,
-      hypothesis: input.hypothesis ?? null,
-      root_domain: input.rootDomain ?? null,
-      confidence_score: input.confidenceScore ?? null,
-      created_by: user?.id ?? null,
-      status: "hypothesis",
-    })
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create core node");
-  }
-  await recordAudit(client, {
-    organizationId,
-    entityType: "core_node",
-    entityId: data.id,
-    action: "core_node.created",
-    after: { title: input.title },
-  });
-  return data.id;
+  return runAtomicRpc<string>(
+    client,
+    "create_core_node",
+    {
+      p_org_id: organizationId,
+      p_client_id: input.clientId,
+      p_title: input.title,
+      p_hypothesis: input.hypothesis ?? null,
+      p_root_domain: input.rootDomain ?? null,
+      p_confidence_score: input.confidenceScore ?? null,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to create core node",
+    }
+  );
 }
 
+/** Link a Theme to a CoreNode; the link and its audit row commit together. */
 export async function linkTheme(
   client: SupabaseClient,
   organizationId: string,
   rawInput: unknown
 ): Promise<void> {
   const input = validate(linkThemeSchema, rawInput);
-  const {
-    data: { user },
-  } = await client.auth.getUser();
 
-  const { error } = await client.from("theme_core_node_links").insert({
-    theme_id: input.themeId,
-    core_node_id: input.coreNodeId,
-    relationship_type: input.relationshipType,
-    confidence: input.confidence ?? null,
-    link_rationale: input.linkRationale ?? null,
-    created_by: user?.id ?? null,
-  });
-  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to link theme");
-
-  await recordAudit(client, {
-    organizationId,
-    entityType: "theme_core_node_link",
-    entityId: input.coreNodeId,
-    action: "core_node.theme_linked",
-    after: { theme_id: input.themeId, relationship_type: input.relationshipType },
-  });
+  await runAtomicRpc<void>(
+    client,
+    "link_theme_core_node",
+    {
+      p_org_id: organizationId,
+      p_core_node_id: input.coreNodeId,
+      p_theme_id: input.themeId,
+      p_relationship_type: input.relationshipType,
+      p_confidence: input.confidence ?? null,
+      p_link_rationale: input.linkRationale ?? null,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to link theme",
+    }
+  );
 }
 
 async function setStatus(
@@ -139,31 +126,23 @@ async function setStatus(
   organizationId: string,
   nodeId: string,
   status: string,
-  extra: Record<string, unknown> = {}
+  flags: { confirm?: boolean; archive?: boolean } = {}
 ): Promise<void> {
-  const { data: current } = await client
-    .from("core_nodes")
-    .select("status")
-    .eq("id", nodeId)
-    .maybeSingle();
-  if (!current) throw new ServiceError("NOT_FOUND", "Core node not found");
-
-  const { error } = await client
-    .from("core_nodes")
-    .update({ status, ...extra })
-    .eq("id", nodeId);
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to update core node status");
-  }
-  await recordAudit(client, {
-    organizationId,
-    entityType: "core_node",
-    entityId: nodeId,
-    action: `core_node.${status}`,
-    after: { status },
-  });
+  await runAtomicRpc<void>(
+    client,
+    "set_core_node_status",
+    {
+      p_org_id: organizationId,
+      p_node_id: nodeId,
+      p_status: status,
+      p_mark_confirmed: flags.confirm ?? false,
+      p_mark_archived: flags.archive ?? false,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to update core node status",
+    }
+  );
 }
 
 /** Human confirmation: hypothesis → active. */
@@ -172,13 +151,7 @@ export async function confirmCoreNode(
   organizationId: string,
   nodeId: string
 ): Promise<void> {
-  const {
-    data: { user },
-  } = await client.auth.getUser();
-  await setStatus(client, organizationId, nodeId, "active", {
-    last_confirmed_by: user?.id ?? null,
-    last_confirmed_at: new Date().toISOString(),
-  });
+  await setStatus(client, organizationId, nodeId, "active", { confirm: true });
 }
 
 export async function rejectCoreNode(
@@ -195,7 +168,5 @@ export async function archiveCoreNode(
   organizationId: string,
   nodeId: string
 ): Promise<void> {
-  await setStatus(client, organizationId, nodeId, "archived", {
-    archived_at: new Date().toISOString(),
-  });
+  await setStatus(client, organizationId, nodeId, "archived", { archive: true });
 }

@@ -1,9 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { runAiFunction } from "@/lib/ai/gateway";
 import type { AiProvider } from "@/lib/ai/provider";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
 import { confidenceWithContradictions } from "./hypotheses";
+import { runAtomicRpc } from "./transaction";
 
 /**
  * AI model layer (ticket 35): updateCoreNodes, generateDifferentialHypotheses
@@ -13,18 +13,12 @@ import { confidenceWithContradictions } from "./hypotheses";
  *   - DifferentialHypothesis → status "hypothesis".
  * A confirmed CoreNode (active or beyond) is never silently overwritten — the
  * AI path may only propose, the human confirms (SPEC §3.4, §36).
+ *
+ * Each batch, its child theme links and the AuditLog row are written by one
+ * atomic RPC, so a partially persisted AI proposal set can no longer exist.
  */
 
 /** Post-hypothesis, human-confirmed lifecycle states (ticket 25). */
-const CONFIRMED_CORE_NODE_STATUSES = new Set([
-  "active",
-  "in_treatment",
-  "treated_unverified",
-  "weakened",
-  "integrated",
-  "reactivated",
-  "contradicted",
-]);
 
 interface CoreNodeProposal {
   action: "create" | "update" | "no_change";
@@ -119,90 +113,32 @@ export async function updateCoreNodes(
   if (!result.ok) throw new ServiceError("INTERNAL_ERROR", result.error);
 
   const proposals = (result.result?.core_node_proposals ?? []) as CoreNodeProposal[];
-  const {
-    data: { user },
-  } = await client.auth.getUser();
-  const touchedIds: string[] = [];
 
-  for (const proposal of proposals) {
-    if (proposal.action === "no_change") continue;
-
-    if (proposal.action === "create") {
-      const { data, error } = await client
-        .from("core_nodes")
-        .insert({
-          organization_id: input.organizationId,
-          client_id: input.clientId,
-          title: proposal.title,
-          hypothesis: proposal.hypothesis,
-          root_domain: proposal.root_domain,
-          confidence_score: proposal.confidence,
-          status: "under_review",
-          created_by: user?.id ?? null,
-        })
-        .select("id")
-        .single();
-      if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to create core node proposal");
-
-      const nodeId = data.id;
-      touchedIds.push(nodeId);
-      await linkThemes(client, nodeId, proposal.theme_links, proposal.rationale);
-      continue;
-    }
-
-    // action === "update": never overwrite a confirmed node (SPEC §3.4).
-    const targetId = proposal.existing_core_node_id;
-    if (!targetId) continue;
-
-    const { data: existing } = await client
-      .from("core_nodes")
-      .select("status")
-      .eq("id", targetId)
-      .eq("client_id", input.clientId)
-      .maybeSingle();
-    if (!existing) continue; // cross-tenant or missing — ignore, never create side effects
-    if (CONFIRMED_CORE_NODE_STATUSES.has(existing.status)) continue; // human approval required
-
-    const { error } = await client
-      .from("core_nodes")
-      .update({
+  // The whole proposal batch (new pending nodes, their theme links and the
+  // audit row) is written by one atomic RPC. The RPC also enforces that a
+  // confirmed CoreNode is never overwritten.
+  return runAtomicRpc<string[]>(
+    client,
+    "apply_ai_core_node_proposals",
+    {
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_proposals: proposals.map((proposal) => ({
+        action: proposal.action,
+        existing_core_node_id: proposal.existing_core_node_id,
         title: proposal.title,
         hypothesis: proposal.hypothesis,
         root_domain: proposal.root_domain,
-        confidence_score: proposal.confidence,
-        status: "under_review",
-      })
-      .eq("id", targetId);
-    if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to update core node proposal");
-    touchedIds.push(targetId);
-  }
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "client",
-    entityId: input.clientId,
-    action: "ai.update_core_nodes",
-    after: { proposed_core_nodes: touchedIds.length },
-  });
-
-  return touchedIds;
-}
-
-async function linkThemes(
-  client: SupabaseClient,
-  coreNodeId: string,
-  themeIds: string[],
-  rationale: string
-): Promise<void> {
-  for (const themeId of themeIds) {
-    const { error } = await client.from("theme_core_node_links").insert({
-      theme_id: themeId,
-      core_node_id: coreNodeId,
-      relationship_type: "supports",
-      link_rationale: rationale || null,
-    });
-    if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to link theme to core node");
-  }
+        confidence: proposal.confidence,
+        theme_links: proposal.theme_links,
+        rationale: proposal.rationale,
+      })),
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to persist core node proposals",
+    }
+  );
 }
 
 /**
@@ -231,45 +167,30 @@ export async function generateDifferentialHypotheses(
   if (!result.ok) throw new ServiceError("INTERNAL_ERROR", result.error);
 
   const proposals = (result.result?.hypotheses ?? []) as HypothesisProposal[];
-  const {
-    data: { user },
-  } = await client.auth.getUser();
-  const createdIds: string[] = [];
 
-  for (const proposal of proposals) {
-    const confidence = confidenceWithContradictions(
-      proposal.confidence ?? 0,
-      proposal.evidence_against_refs.length
-    );
-
-    const { data, error } = await client
-      .from("differential_hypotheses")
-      .insert({
-        organization_id: input.organizationId,
-        client_id: input.clientId,
+  // The whole hypothesis batch and its audit row commit or roll back together.
+  return runAtomicRpc<string[]>(
+    client,
+    "create_ai_hypotheses",
+    {
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_hypotheses: proposals.map((proposal) => ({
         title: proposal.title,
         description: proposal.description,
-        confidence_score: confidence,
-        status: "hypothesis",
+        confidence: confidenceWithContradictions(
+          proposal.confidence ?? 0,
+          proposal.evidence_against_refs.length
+        ),
         evidence_for: proposal.evidence_for_refs,
         evidence_against: proposal.evidence_against_refs,
-        created_by: user?.id ?? null,
-      })
-      .select("id")
-      .single();
-    if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to create hypothesis proposal");
-    createdIds.push(data.id);
-  }
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "client",
-    entityId: input.clientId,
-    action: "ai.generate_differential_hypotheses",
-    after: { proposed_hypotheses: createdIds.length },
-  });
-
-  return createdIds;
+      })),
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to persist hypothesis proposals",
+    }
+  );
 }
 
 /**
@@ -298,50 +219,28 @@ export async function detectContradictions(
   if (!result.ok) throw new ServiceError("INTERNAL_ERROR", result.error);
 
   const contradictions = (result.result?.contradictions ?? []) as ContradictionProposal[];
-  const {
-    data: { user },
-  } = await client.auth.getUser();
-  const relationIds: string[] = [];
 
-  for (const contradiction of contradictions) {
-    const fromId = contradiction.entity_refs_for[0];
-    const toId = contradiction.entity_refs_against[0];
-    if (!fromId || !toId) continue;
-
-    // Only core-node pairs map to a `contradicts` relation; validate ownership
-    // so a proposal can never create a cross-tenant link.
-    const { data: nodes } = await client
-      .from("core_nodes")
-      .select("id")
-      .in("id", [fromId, toId])
-      .eq("client_id", input.clientId);
-    if (!nodes || nodes.length !== 2) continue;
-
-    const { data, error } = await client
-      .from("core_node_relations")
-      .insert({
-        organization_id: input.organizationId,
-        client_id: input.clientId,
-        from_core_node_id: fromId,
-        to_core_node_id: toId,
-        relation_type: "contradicts",
-        confidence: contradiction.relevance_score,
-        evidence_summary: contradiction.description,
-        created_by: user?.id ?? null,
-      })
-      .select("id")
-      .single();
-    if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to persist contradiction");
-    relationIds.push(data.id);
-  }
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "client",
-    entityId: input.clientId,
-    action: "ai.detect_contradictions",
-    after: { contradiction_relations: relationIds.length },
-  });
-
-  return relationIds;
+  // Cautious `contradicts` relations and the audit row commit together; the RPC
+  // validates endpoint ownership so a proposal can never create a cross-tenant
+  // link.
+  return runAtomicRpc<string[]>(
+    client,
+    "create_ai_contradiction_relations",
+    {
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_items: contradictions
+        .map((contradiction) => ({
+          from_core_node_id: contradiction.entity_refs_for[0] ?? null,
+          to_core_node_id: contradiction.entity_refs_against[0] ?? null,
+          confidence: contradiction.relevance_score,
+          evidence_summary: contradiction.description,
+        }))
+        .filter((item) => item.from_core_node_id && item.to_core_node_id),
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to persist contradictions",
+    }
+  );
 }

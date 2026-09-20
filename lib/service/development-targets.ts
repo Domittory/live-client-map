@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit } from "./audit";
-import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 const levelSchema = z.number().int().min(0).max(100);
@@ -21,40 +20,35 @@ export const createDevelopmentTargetSchema = z
   })
   .strict();
 
+/** The target row and its AuditLog entry commit or roll back together. */
 export async function createDevelopmentTarget(
   client: SupabaseClient,
   organizationId: string,
   rawInput: unknown
 ): Promise<string> {
   const input = validate(createDevelopmentTargetSchema, rawInput);
-  const { data, error } = await client
-    .from("development_targets")
-    .insert({
-      organization_id: organizationId,
-      client_id: input.clientId,
-      name: input.name,
-      description: input.description ?? null,
-      domain: input.domain ?? null,
-      current_level: input.currentLevel ?? null,
-      target_level: input.targetLevel ?? null,
-      importance: input.importance ?? "normal",
-      linked_resources: input.linkedResources ?? [],
-      linked_core_nodes: input.linkedCoreNodes ?? [],
-      success_markers: input.successMarkers ?? [],
-    })
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create development target");
-  }
-  await recordAudit(client, {
-    organizationId,
-    entityType: "development_target",
-    entityId: data.id,
-    action: "development_target.created",
-    after: { name: input.name },
-  });
-  return data.id;
+
+  return runAtomicRpc<string>(
+    client,
+    "create_development_target",
+    {
+      p_org_id: organizationId,
+      p_client_id: input.clientId,
+      p_payload: {
+        name: input.name,
+        description: input.description ?? null,
+        domain: input.domain ?? null,
+        current_level: input.currentLevel ?? null,
+        target_level: input.targetLevel ?? null,
+        importance: input.importance ?? "normal",
+        linked_resources: input.linkedResources ?? [],
+        linked_core_nodes: input.linkedCoreNodes ?? [],
+        success_markers: input.successMarkers ?? [],
+      },
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to create development target",
+    }
+  );
 }

@@ -1,8 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { runAiFunction } from "@/lib/ai/gateway";
 import type { AiProvider } from "@/lib/ai/provider";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 
 /**
  * updateResources (ticket 36): AI proposes new or updated Resources from
@@ -36,12 +36,6 @@ export interface UpdateResourcesInput {
   existingLinks: unknown[];
 }
 
-function mergeRefs(current: string[] | null, incoming: string[]): string[] {
-  const seen = new Set(current ?? []);
-  for (const ref of incoming) seen.add(ref);
-  return [...seen];
-}
-
 export async function updateResources(
   client: SupabaseClient,
   provider: AiProvider,
@@ -63,78 +57,32 @@ export async function updateResources(
   if (!result.ok) throw new ServiceError("INTERNAL_ERROR", result.error);
 
   const proposals = (result.result?.resource_proposals ?? []) as ResourceProposal[];
-  const touchedIds: string[] = [];
 
-  for (const proposal of proposals) {
-    if (proposal.action === "no_change") continue;
-
-    if (proposal.action === "create") {
-      const { data, error } = await client
-        .from("resources")
-        .insert({
-          organization_id: input.organizationId,
-          client_id: input.clientId,
-          name: proposal.name,
-          description: proposal.description || null,
-          domain: proposal.domain,
-          strength_score: proposal.proposed_strength,
-          confidence_score: proposal.proposed_confidence,
-          trend: proposal.proposed_trend,
-          evidence_refs: proposal.evidence_refs,
-          evidence_summary: proposal.rationale,
-          review_status: "pending",
-        })
-        .select("id")
-        .single();
-      if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to create resource proposal");
-      touchedIds.push(data.id);
-      continue;
-    }
-
-    // update / link_existing: only touch a resource that belongs to this client.
-    const targetId = proposal.existing_resource_id;
-    if (!targetId) continue;
-
-    const { data: existing } = await client
-      .from("resources")
-      .select("evidence_refs")
-      .eq("id", targetId)
-      .eq("client_id", input.clientId)
-      .maybeSingle();
-    if (!existing) continue; // cross-tenant or missing — ignore, never side effects
-
-    if (proposal.action === "link_existing") {
-      const merged = mergeRefs(existing.evidence_refs, proposal.evidence_refs);
-      const { error } = await client
-        .from("resources")
-        .update({ evidence_refs: merged, review_status: "pending" })
-        .eq("id", targetId);
-      if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to link evidence to resource");
-      touchedIds.push(targetId);
-      continue;
-    }
-
-    const { error } = await client
-      .from("resources")
-      .update({
-        strength_score: proposal.proposed_strength,
-        confidence_score: proposal.proposed_confidence,
-        trend: proposal.proposed_trend,
+  // The whole proposal batch (new/updated Resources, merged evidence refs and
+  // the audit row) commits in one transaction. AI-created Resources stay
+  // pending review and only a resource of this client is ever touched.
+  return runAtomicRpc<string[]>(
+    client,
+    "apply_ai_resource_proposals",
+    {
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_proposals: proposals.map((proposal) => ({
+        action: proposal.action,
+        existing_resource_id: proposal.existing_resource_id,
+        name: proposal.name,
+        description: proposal.description,
+        domain: proposal.domain,
+        proposed_strength: proposal.proposed_strength,
+        proposed_confidence: proposal.proposed_confidence,
+        proposed_trend: proposal.proposed_trend,
         evidence_refs: proposal.evidence_refs,
-        review_status: "pending",
-      })
-      .eq("id", targetId);
-    if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to update resource proposal");
-    touchedIds.push(targetId);
-  }
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "client",
-    entityId: input.clientId,
-    action: "ai.update_resources",
-    after: { proposed_resources: touchedIds.length },
-  });
-
-  return touchedIds;
+        rationale: proposal.rationale,
+      })),
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to persist resource proposals",
+    }
+  );
 }

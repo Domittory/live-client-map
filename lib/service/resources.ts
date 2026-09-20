@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 export const createResourceSchema = z
@@ -27,8 +27,8 @@ export const updateResourceSchema = z
 
 /**
  * Resources are independent of problem reduction (SPEC §8.18): they are created
- * only by an explicit specialist action. Each score change must carry evidence
- * or a human reason.
+ * only by an explicit specialist action. The resource and its audit row commit
+ * in one transaction.
  */
 export async function createResource(
   client: SupabaseClient,
@@ -36,35 +36,28 @@ export async function createResource(
   rawInput: unknown
 ): Promise<string> {
   const input = validate(createResourceSchema, rawInput);
-  const { data, error } = await client
-    .from("resources")
-    .insert({
-      organization_id: organizationId,
-      client_id: input.clientId,
-      name: input.name,
-      description: input.description ?? null,
-      domain: input.domain ?? null,
-      strength_score: input.strengthScore ?? null,
-      confidence_score: input.confidenceScore ?? null,
-      evidence_summary: input.evidenceSummary ?? null,
-    })
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create resource");
-  }
-  await recordAudit(client, {
-    organizationId,
-    entityType: "resource",
-    entityId: data.id,
-    action: "resource.created",
-    after: { name: input.name },
-  });
-  return data.id;
+
+  return runAtomicRpc<string>(
+    client,
+    "create_resource",
+    {
+      p_org_id: organizationId,
+      p_client_id: input.clientId,
+      p_name: input.name,
+      p_description: input.description ?? null,
+      p_domain: input.domain ?? null,
+      p_strength_score: input.strengthScore ?? null,
+      p_confidence_score: input.confidenceScore ?? null,
+      p_evidence_summary: input.evidenceSummary ?? null,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to create resource",
+    }
+  );
 }
 
+/** Each score change must carry evidence or a human reason (checked in SQL too). */
 export async function updateResource(
   client: SupabaseClient,
   organizationId: string,
@@ -87,18 +80,18 @@ export async function updateResource(
   if (input.confidenceScore !== undefined) patch.confidence_score = input.confidenceScore;
   if (input.evidenceSummary !== undefined) patch.evidence_summary = input.evidenceSummary;
 
-  const { error } = await client.from("resources").update(patch).eq("id", input.id);
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to update resource");
-  }
-  await recordAudit(client, {
-    organizationId,
-    entityType: "resource",
-    entityId: input.id,
-    action: "resource.updated",
-    after: patch,
-    reason: input.evidenceSummary ?? undefined,
-  });
+  await runAtomicRpc<void>(
+    client,
+    "update_resource",
+    {
+      p_resource_id: input.id,
+      p_patch: patch,
+      p_reason: input.evidenceSummary ?? null,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to update resource",
+      validation: "Resource score change requires evidence summary or human reason",
+    }
+  );
 }

@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit } from "./audit";
-import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 export const PURPOSE_SOURCE_SYSTEMS = [
@@ -42,35 +41,29 @@ export async function createPurposeProfile(
   rawInput: unknown
 ): Promise<string> {
   const input = validate(createPurposeProfileSchema, rawInput);
-  const { data, error } = await client
-    .from("purpose_profiles")
-    .insert({
-      organization_id: organizationId,
-      client_id: input.clientId,
-      source_system: input.sourceSystem,
-      raw_data: (input.rawData ?? {}) as Record<string, unknown>,
-      interpretation: input.interpretation ?? null,
-      strengths: input.strengths ?? [],
-      potential_roles: input.potentialRoles ?? [],
-      development_directions: input.developmentDirections ?? [],
-      confidence: input.confidence ?? null,
-      visibility: input.visibility ?? "internal",
-    })
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create purpose profile");
-  }
-  await recordAudit(client, {
-    organizationId,
-    entityType: "purpose_profile",
-    entityId: data.id,
-    action: "purpose_profile.created",
-    after: { source_system: input.sourceSystem },
-  });
-  return data.id;
+
+  return runAtomicRpc<string>(
+    client,
+    "create_purpose_profile",
+    {
+      p_org_id: organizationId,
+      p_client_id: input.clientId,
+      p_payload: {
+        source_system: input.sourceSystem,
+        raw_data: (input.rawData ?? {}) as Record<string, unknown>,
+        interpretation: input.interpretation ?? null,
+        strengths: input.strengths ?? [],
+        potential_roles: input.potentialRoles ?? [],
+        development_directions: input.developmentDirections ?? [],
+        confidence: input.confidence ?? null,
+        visibility: input.visibility ?? "internal",
+      },
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to create purpose profile",
+    }
+  );
 }
 
 export async function createPurposeSynthesis(
@@ -79,28 +72,23 @@ export async function createPurposeSynthesis(
   rawInput: unknown
 ): Promise<string> {
   const input = validate(createSynthesisSchema, rawInput);
-  const { data, error } = await client
-    .from("purpose_syntheses")
-    .insert({
-      organization_id: organizationId,
-      client_id: input.clientId,
-      summary: input.summary ?? null,
-      cross_system_matches: input.crossSystemMatches ?? [],
-      potential_conflicts: input.potentialConflicts ?? [],
-      recommended_development_vectors: input.recommendedDevelopmentVectors ?? [],
-    })
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create purpose synthesis");
-  }
-  await recordAudit(client, {
-    organizationId,
-    entityType: "purpose_synthesis",
-    entityId: data.id,
-    action: "purpose_synthesis.created",
-  });
-  return data.id;
+
+  return runAtomicRpc<string>(
+    client,
+    "create_purpose_synthesis",
+    {
+      p_org_id: organizationId,
+      p_client_id: input.clientId,
+      p_payload: {
+        summary: input.summary ?? null,
+        cross_system_matches: input.crossSystemMatches ?? [],
+        potential_conflicts: input.potentialConflicts ?? [],
+        recommended_development_vectors: input.recommendedDevelopmentVectors ?? [],
+      },
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to create purpose synthesis",
+    }
+  );
 }

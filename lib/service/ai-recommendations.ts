@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { runAiFunction } from "@/lib/ai/gateway";
 import type { AiProvider } from "@/lib/ai/provider";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
 import {
   SCORING_MODEL_VERSION,
@@ -9,6 +8,7 @@ import {
   systemicLeverageScore,
   type ScoreInputs,
 } from "./scoring";
+import { runAtomicRpc } from "./transaction";
 
 /**
  * generateRecommendations (ticket 37): AI proposes explained, ranked
@@ -108,12 +108,11 @@ export async function generateRecommendations(
   if (!result.ok) throw new ServiceError("INTERNAL_ERROR", result.error);
 
   const proposals = (result.result?.recommendations ?? []) as RecommendationProposal[];
-  const {
-    data: { user },
-  } = await client.auth.getUser();
-  const createdIds: string[] = [];
 
-  for (const proposal of proposals) {
+  // Every proposal is persisted as an internal draft with the deterministic
+  // risk gate. The whole batch, its targets and the AuditLog row commit in one
+  // transaction: a failed proposal leaves no partial recommendation behind.
+  const items = proposals.map((proposal) => {
     const primaryRef = proposal.score_card_ref ?? proposal.target_refs[0]?.ref ?? null;
     const inputs = primaryRef ? (scoreByRef.get(primaryRef) ?? null) : null;
 
@@ -123,60 +122,50 @@ export async function generateRecommendations(
       : { finalPriorityScore: null, systemicLeverageScore: null };
     const requiresReview = riskGate(inputs ?? emptyScoreInputs(), proposal.human_review_required);
 
-    const { data, error } = await client
-      .from("recommendations")
-      .insert({
-        organization_id: input.organizationId,
-        client_id: input.clientId,
-        client_request_id: input.clientRequestId,
-        proposed_correction: proposal.proposed_correction,
-        rationale: proposal.rationale,
-        rootness_score: inputs?.rootnessScore ?? null,
-        impact_score: inputs?.impactScore ?? null,
-        activation_score: inputs?.activationScore ?? null,
-        confidence_score: inputs?.confidenceScore ?? null,
-        client_relevance_score: inputs?.clientRelevanceScore ?? null,
-        readiness_score: inputs?.readinessScore ?? null,
-        unlock_score: inputs?.unlockScore ?? null,
-        risk_score: inputs?.riskScore ?? null,
-        systemic_leverage_score: scores.systemicLeverageScore,
-        final_priority_score: scores.finalPriorityScore,
-        scoring_model_version: SCORING_MODEL_VERSION,
-        risk_notes: proposal.risk_notes,
-        missing_evidence: proposal.missing_evidence,
-        rank_rationale: proposal.rank_rationale,
-        status: "draft",
-        human_review_required: requiresReview,
-        visibility: "internal",
-        created_by: user?.id ?? null,
-      })
-      .select("id")
-      .single();
-    if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to create recommendation");
-    const recommendationId = data.id;
-    createdIds.push(recommendationId);
-
-    for (const target of proposal.target_refs) {
-      const { error: targetError } = await client.from("recommendation_targets").insert({
-        recommendation_id: recommendationId,
+    return {
+      proposed_correction: proposal.proposed_correction,
+      rationale: proposal.rationale,
+      rootness_score: inputs?.rootnessScore ?? null,
+      impact_score: inputs?.impactScore ?? null,
+      activation_score: inputs?.activationScore ?? null,
+      confidence_score: inputs?.confidenceScore ?? null,
+      client_relevance_score: inputs?.clientRelevanceScore ?? null,
+      readiness_score: inputs?.readinessScore ?? null,
+      unlock_score: inputs?.unlockScore ?? null,
+      risk_score: inputs?.riskScore ?? null,
+      systemic_leverage_score: scores.systemicLeverageScore,
+      final_priority_score: scores.finalPriorityScore,
+      scoring_model_version: SCORING_MODEL_VERSION,
+      risk_notes: proposal.risk_notes,
+      missing_evidence: proposal.missing_evidence,
+      rank_rationale: proposal.rank_rationale,
+      human_review_required: requiresReview,
+      targets: proposal.target_refs.map((target) => ({
+        target_type: null,
         target_id: target.ref,
         role: target.role,
         expected_effect: target.expected_effect,
-      });
-      if (targetError)
-        throw new ServiceError("INTERNAL_ERROR", "Failed to create recommendation target");
-    }
-  }
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "client",
-    entityId: input.clientId,
-    action: "ai.generate_recommendations",
-    after: { proposed_recommendations: createdIds.length },
+      })),
+    };
   });
 
-  return createdIds;
+  return runAtomicRpc<string[]>(
+    client,
+    "create_recommendations",
+    {
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_payload: {
+        client_request_id: input.clientRequestId,
+        items,
+      },
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to create recommendation",
+      validation: "Client request does not belong to this client",
+    }
+  );
 }
 
 function emptyScoreInputs(): ScoreInputs {

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 // Allowed relationship vocabulary (SPEC §8.16). `causes` is intentionally absent;
@@ -43,49 +43,43 @@ export const createActivationSchema = z
   })
   .strict();
 
+/**
+ * Create a CoreNode relation and its AuditLog row in one transaction. The
+ * service path can never produce `causes_confirmed`; that type is reachable only
+ * through the explicit human confirmation below.
+ */
 export async function createRelation(
   client: SupabaseClient,
   organizationId: string,
   rawInput: unknown
 ): Promise<string> {
   const input = validate(createRelationSchema, rawInput);
-  const {
-    data: { user },
-  } = await client.auth.getUser();
 
-  const { data, error } = await client
-    .from("core_node_relations")
-    .insert({
-      organization_id: organizationId,
-      client_id: input.clientId,
-      from_core_node_id: input.fromCoreNodeId,
-      to_core_node_id: input.toCoreNodeId,
-      relation_type: input.relationType,
-      strength: input.strength ?? null,
-      confidence: input.confidence ?? null,
-      evidence_summary: input.evidenceSummary ?? null,
-      created_by: user?.id ?? null,
-    })
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create relation");
-  }
-  await recordAudit(client, {
-    organizationId,
-    entityType: "core_node_relation",
-    entityId: data.id,
-    action: "relation.created",
-    after: { relation_type: input.relationType },
-  });
-  return data.id;
+  return runAtomicRpc<string>(
+    client,
+    "create_relation",
+    {
+      p_org_id: organizationId,
+      p_client_id: input.clientId,
+      p_from_core_node_id: input.fromCoreNodeId,
+      p_to_core_node_id: input.toCoreNodeId,
+      p_relation_type: input.relationType,
+      p_strength: input.strength ?? null,
+      p_confidence: input.confidence ?? null,
+      p_evidence_summary: input.evidenceSummary ?? null,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to create relation",
+      validation: "Relation endpoints must belong to this client",
+    }
+  );
 }
 
 /**
  * Human-confirmed strong causal relation. Requires an explicit reason (SPEC
- * §8.16) — the AI path can never reach causes_confirmed.
+ * §8.16) — the AI path can never reach causes_confirmed. The type change and its
+ * audit row (carrying the reason) commit or roll back together.
  */
 export async function confirmCausalRelation(
   client: SupabaseClient,
@@ -96,20 +90,21 @@ export async function confirmCausalRelation(
   if (!reason.trim()) {
     throw new ServiceError("VALIDATION_ERROR", "causes_confirmed requires an audit reason");
   }
-  const { error } = await client
-    .from("core_node_relations")
-    .update({ relation_type: "causes_confirmed" })
-    .eq("id", relationId);
-  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to confirm causal relation");
 
-  await recordAudit(client, {
-    organizationId,
-    entityType: "core_node_relation",
-    entityId: relationId,
-    action: "relation.causes_confirmed",
-    after: { relation_type: "causes_confirmed" },
-    reason,
-  });
+  await runAtomicRpc<void>(
+    client,
+    "confirm_causal_relation",
+    {
+      p_org_id: organizationId,
+      p_relation_id: relationId,
+      p_reason: reason,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to confirm causal relation",
+      validation: "causes_confirmed requires an audit reason",
+    }
+  );
 }
 
 export async function createTriggerActivation(

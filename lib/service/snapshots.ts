@@ -2,11 +2,11 @@ import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { AI_CONTRACTS, MODEL_CONFIG } from "@/lib/ai/contracts";
-import { withAudit } from "./audit";
 import { requireConsent } from "./consent";
 import { ServiceError } from "./errors";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
 import { SCORING_MODEL_VERSION } from "./scoring";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /**
@@ -423,13 +423,6 @@ async function requireUserId(client: SupabaseClient): Promise<string> {
   return user.id;
 }
 
-function mapWriteError(error: { code?: string }, fallback: string): ServiceError {
-  if (error.code === "42501") {
-    return new ServiceError("FORBIDDEN", "You do not have permission to modify this client");
-  }
-  return new ServiceError("INTERNAL_ERROR", fallback);
-}
-
 function mapRow(data: unknown): PsychologicalSnapshot {
   return data as PsychologicalSnapshot;
 }
@@ -458,17 +451,18 @@ async function latestSnapshot(
 // --- Service -------------------------------------------------------------------
 
 /**
- * Generate the next immutable snapshot for a client. version = previous + 1
- * (monotonic, unique per client; a concurrent generation conflict is retried
- * once). The snapshot stores the deterministic content, the model_hash and the
- * versions it was generated with. Nothing about previous snapshots is touched.
+ * Generate the next immutable snapshot for a client. The version is allocated
+ * under a per-client lock inside the RPC (monotonic, unique per client). The
+ * snapshot row and its audit row commit in one transaction, and consent is
+ * re-asserted inside that transaction. Nothing about previous snapshots is
+ * touched.
  */
 export async function generateSnapshot(
   client: SupabaseClient,
   rawInput: unknown
 ): Promise<PsychologicalSnapshot> {
   const input = validate(generateSnapshotSchema, rawInput);
-  const userId = await requireUserId(client);
+  await requireUserId(client);
 
   await requireConsent(client, input.clientId, "data_storage");
   await requireConsent(client, input.clientId, "sensitive_psychological_data");
@@ -489,55 +483,30 @@ export async function generateSnapshot(
   const previous = await latestSnapshot(client, input.clientId);
   const changes = previous ? diffSnapshots(snapshotContent(previous), content) : null;
 
-  const insertRow = (version: number) => ({
-    organization_id: clientRow.organization_id,
-    client_id: input.clientId,
-    version,
-    generated_by: userId,
-    reason: input.reason,
-    summary,
-    ...content,
-    trend_summary: trendSummary,
-    risk_notes: riskNotes,
-    evidence_digest: evidenceDigest,
-    changes_since_previous: changes,
-    model_hash: modelHash,
-    ...versions,
-  });
-
-  const snapshot = await withAudit(
+  return runAtomicRpc<PsychologicalSnapshot>(
     client,
+    "create_snapshot",
     {
-      organizationId: clientRow.organization_id,
-      entityType: "psychological_snapshot",
-      action: "snapshot.generate",
-      reason: input.reason,
+      p_org_id: clientRow.organization_id,
+      p_client_id: input.clientId,
+      p_reason: input.reason,
+      p_payload: {
+        summary,
+        ...content,
+        trend_summary: trendSummary,
+        risk_notes: riskNotes,
+        evidence_digest: evidenceDigest,
+        changes_since_previous: changes,
+        model_hash: modelHash,
+        ...versions,
+      },
     },
-    async (): Promise<PsychologicalSnapshot> => {
-      let version = (previous?.version ?? 0) + 1;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const { data, error } = await client
-          .from("psychological_snapshots")
-          .insert(insertRow(version))
-          .select()
-          .single();
-        if (!error) return mapRow(data);
-        if (error.code === "23505" && attempt === 0) {
-          // Concurrent generation took this version; re-read and retry once.
-          const latest = await latestSnapshot(client, input.clientId);
-          version = (latest?.version ?? 0) + 1;
-          continue;
-        }
-        if (error.code === "23505") {
-          throw new ServiceError("CONFLICT", "Snapshot version conflict, retry generation");
-        }
-        throw mapWriteError(error, "Failed to generate snapshot");
-      }
-      throw new ServiceError("INTERNAL_ERROR", "Failed to generate snapshot");
+    {
+      forbidden: "You do not have permission to modify this client",
+      failure: "Failed to generate snapshot",
+      conflict: "Snapshot version conflict, retry generation",
     }
   );
-
-  return snapshot;
 }
 
 /** Read one snapshot (RLS-enforced). */

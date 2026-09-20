@@ -2,7 +2,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { runAiFunction } from "@/lib/ai/gateway";
 import type { AiProvider } from "@/lib/ai/provider";
-import { withAudit } from "./audit";
 import { requireConsent } from "./consent";
 import { ServiceError } from "./errors";
 import type { ModelChange } from "./model-changes";
@@ -16,6 +15,7 @@ import {
   type SnapshotDiff,
   type SnapshotItem,
 } from "./snapshots";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /**
@@ -182,13 +182,6 @@ async function requireUserId(client: SupabaseClient): Promise<string> {
   return user.id;
 }
 
-function mapWriteError(error: { code?: string }, fallback: string): ServiceError {
-  if (error.code === "42501") {
-    return new ServiceError("FORBIDDEN", "You do not have permission to modify this client");
-  }
-  return new ServiceError("INTERNAL_ERROR", fallback);
-}
-
 function mapRow(data: unknown): ModelExplanation {
   return data as ModelExplanation;
 }
@@ -277,22 +270,35 @@ async function saveExplanation(
     missing_evidence: string[];
     versions: Partial<ExplanationVersions>;
     run_id: string | null;
-    created_by: string;
   },
   action: string
 ): Promise<ModelExplanation> {
-  return withAudit(
+  // The explanation row, its audit entry and the consent check happen in one
+  // transaction. Only "pending" or "rejected" can be created — the AI can never
+  // store an approved explanation.
+  return runAtomicRpc<ModelExplanation>(
     client,
+    "save_model_explanation",
     {
-      organizationId: row.organization_id,
-      entityType: "model_explanation",
-      action,
-      reason: `client ${row.client_id}`,
+      p_org_id: row.organization_id,
+      p_client_id: row.client_id,
+      p_action: action,
+      p_payload: {
+        status: row.status,
+        source: row.source,
+        before_snapshot_id: row.before_snapshot_id,
+        after_snapshot_id: row.after_snapshot_id,
+        explanations: row.explanations,
+        grounding: row.grounding,
+        grounding_errors: row.grounding_errors,
+        missing_evidence: row.missing_evidence,
+        versions: row.versions,
+        run_id: row.run_id,
+      },
     },
-    async () => {
-      const { data, error } = await client.from("model_explanations").insert(row).select().single();
-      if (error) throw mapWriteError(error, "Failed to save model explanation");
-      return mapRow(data);
+    {
+      forbidden: "You do not have permission to modify this client",
+      failure: "Failed to save model explanation",
     }
   );
 }
@@ -317,7 +323,7 @@ export async function explainModelChanges(
   rawInput: unknown
 ): Promise<ModelExplanation> {
   const input = validate(explainModelChangesSchema, rawInput);
-  const userId = await requireUserId(client);
+  await requireUserId(client);
 
   await requireConsent(client, input.clientId, "data_storage");
   await requireConsent(client, input.clientId, "sensitive_psychological_data");
@@ -361,7 +367,6 @@ export async function explainModelChanges(
         missing_evidence: missing,
         versions,
         run_id: null,
-        created_by: userId,
       },
       "model_explanation.explain_guard"
     );
@@ -436,7 +441,6 @@ export async function explainModelChanges(
       missing_evidence: [],
       versions,
       run_id: result.runId,
-      created_by: userId,
     },
     "model_explanation.explain"
   );
@@ -491,7 +495,7 @@ export async function reviewModelExplanation(
   rawInput: unknown
 ): Promise<ModelExplanation> {
   const input = validate(reviewModelExplanationSchema, rawInput);
-  const userId = await requireUserId(client);
+  await requireUserId(client);
 
   const before = await getModelExplanation(client, input.explanationId);
   if (before.status !== "pending") {
@@ -499,7 +503,9 @@ export async function reviewModelExplanation(
   }
 
   if (input.decision === "approve") {
-    // Defense in depth: re-run the deterministic grounding check.
+    // Defense in depth: re-run the deterministic grounding check. The RPC runs
+    // the same check inside the transaction, so a fabricated explanation can
+    // never be flipped to approved even if this read is bypassed.
     const errors = validateExplanationGrounding(before.explanations, before.grounding);
     if (errors.length > 0) {
       throw new ServiceError(
@@ -509,30 +515,19 @@ export async function reviewModelExplanation(
     }
   }
 
-  const now = new Date().toISOString();
-  const status: ModelExplanationStatus = input.decision === "approve" ? "approved" : "rejected";
-
-  return withAudit(
+  return runAtomicRpc<ModelExplanation>(
     client,
+    "review_model_explanation",
     {
-      organizationId: before.organization_id,
-      entityType: "model_explanation",
-      entityId: before.id,
-      action: `model_explanation.${input.decision}`,
-      before: { status: before.status },
-      after: { status },
+      p_org_id: before.organization_id,
+      p_explanation_id: before.id,
+      p_decision: input.decision,
     },
-    async () => {
-      const { data, error } = await client
-        .from("model_explanations")
-        .update({ status, decided_by: userId, decided_at: now })
-        .eq("id", before.id)
-        .eq("status", "pending")
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to review model explanation");
-      if (!data) throw new ServiceError("NOT_FOUND", "Model explanation not found");
-      return mapRow(data);
+    {
+      forbidden:
+        "Explanation references changes or evidence that do not exist and cannot be approved",
+      failure: "Failed to review model explanation",
+      conflict: "Explanation was already reviewed",
     }
   );
 }

@@ -1,8 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { runAiFunction } from "@/lib/ai/gateway";
 import type { AiProvider } from "@/lib/ai/provider";
-import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 
 interface ClusterProposal {
   action: "create" | "update" | "no_change";
@@ -50,36 +50,29 @@ export async function clusterEvidence(
   if (!result.ok) throw new ServiceError("INTERNAL_ERROR", result.error);
 
   const proposals = (result.result?.clusters ?? []) as ClusterProposal[];
-  const createdIds: string[] = [];
 
-  for (const proposal of proposals) {
-    if (proposal.action !== "create") continue;
-    const { data, error } = await client
-      .from("evidence_clusters")
-      .insert({
-        organization_id: input.organizationId,
-        client_id: input.clientId,
-        diagnostic_session_id: input.diagnosticSessionId,
-        semantic_topic: proposal.semantic_topic,
-        context_key: proposal.context_key,
-        signals_count: proposal.signal_ids.length,
-        independent_weight: 1,
-      })
-      .select("id")
-      .single();
-    if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to create evidence cluster");
-    createdIds.push(data.id);
-  }
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "diagnostic_session",
-    entityId: input.diagnosticSessionId,
-    action: "ai.cluster_evidence",
-    after: { created_clusters: createdIds.length },
-  });
-
-  return createdIds;
+  // Only `create` proposals are persisted; the whole batch, its audit row and
+  // the deterministic independent_weight = 1 commit in one transaction.
+  return runAtomicRpc<string[]>(
+    client,
+    "create_evidence_clusters",
+    {
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_session_id: input.diagnosticSessionId,
+      p_clusters: proposals
+        .filter((proposal) => proposal.action === "create")
+        .map((proposal) => ({
+          semantic_topic: proposal.semantic_topic,
+          context_key: proposal.context_key,
+          signals_count: proposal.signal_ids.length,
+        })),
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to create evidence clusters",
+    }
+  );
 }
 
 /**
@@ -112,50 +105,28 @@ export async function classifyThemes(
   if (!result.ok) throw new ServiceError("INTERNAL_ERROR", result.error);
 
   const proposals = (result.result?.theme_proposals ?? []) as ThemeProposal[];
-  const themeIds: string[] = [];
 
-  for (const proposal of proposals) {
-    if (proposal.action === "no_change") continue;
-
-    let themeId = proposal.existing_theme_id;
-    if (proposal.action === "create") {
-      const { data, error } = await client
-        .from("themes")
-        .insert({
-          organization_id: input.organizationId,
-          client_id: input.clientId,
-          name: proposal.name,
-          description: proposal.description,
-          domain: proposal.domain,
-          confidence_score: proposal.confidence,
-          review_status: "pending",
-        })
-        .select("id")
-        .single();
-      if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to create theme proposal");
-      themeId = data.id;
-      if (themeId) themeIds.push(themeId);
+  // AI themes are created pending and their signal links commit in the same
+  // transaction; a failed link rolls the new theme back.
+  return runAtomicRpc<string[]>(
+    client,
+    "apply_ai_theme_proposals",
+    {
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_proposals: proposals.map((proposal) => ({
+        action: proposal.action,
+        existing_theme_id: proposal.existing_theme_id,
+        name: proposal.name,
+        description: proposal.description,
+        domain: proposal.domain,
+        confidence: proposal.confidence,
+        signal_links: proposal.signal_links,
+      })),
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to persist theme proposals",
     }
-
-    if (!themeId) continue;
-    for (const link of proposal.signal_links) {
-      const { error } = await client.from("signal_theme_links").insert({
-        signal_id: link.signal_id,
-        theme_id: themeId,
-        relevance_score: link.relevance_score,
-        link_rationale: link.link_rationale,
-      });
-      if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to link signal to theme");
-    }
-  }
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "client",
-    entityId: input.clientId,
-    action: "ai.classify_themes",
-    after: { proposed_themes: themeIds.length },
-  });
-
-  return themeIds;
+  );
 }

@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit } from "./audit";
-import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 export const createThemeSchema = z
@@ -22,67 +21,57 @@ export const linkSignalSchema = z
   })
   .strict();
 
+/** Create a Theme and its AuditLog row in one transaction. */
 export async function createTheme(
   client: SupabaseClient,
   organizationId: string,
   rawInput: unknown
 ): Promise<string> {
   const input = validate(createThemeSchema, rawInput);
-  const { data, error } = await client
-    .from("themes")
-    .insert({
-      organization_id: organizationId,
-      client_id: input.clientId,
-      name: input.name,
-      description: input.description ?? null,
-      domain: input.domain ?? null,
-      first_seen_at: new Date().toISOString(),
-    })
-    .select("id")
-    .single();
-  if (error) {
-    if (error.code === "42501")
-      throw new ServiceError("FORBIDDEN", "No write access to this client");
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create theme");
-  }
-  await recordAudit(client, {
-    organizationId,
-    entityType: "theme",
-    entityId: data.id,
-    action: "theme.created",
-    after: { name: input.name },
-  });
-  return data.id;
+
+  return runAtomicRpc<string>(
+    client,
+    "create_theme",
+    {
+      p_org_id: organizationId,
+      p_client_id: input.clientId,
+      p_name: input.name,
+      p_description: input.description ?? null,
+      p_domain: input.domain ?? null,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to create theme",
+    }
+  );
 }
 
+/**
+ * Link one Signal to a Theme. The link, the recomputed aggregates and the audit
+ * row are one transaction: a failure leaves neither a link nor an audit entry.
+ */
 export async function linkSignal(
   client: SupabaseClient,
   organizationId: string,
   rawInput: unknown
 ): Promise<void> {
   const input = validate(linkSignalSchema, rawInput);
-  const {
-    data: { user },
-  } = await client.auth.getUser();
 
-  const { error } = await client.from("signal_theme_links").insert({
-    signal_id: input.signalId,
-    theme_id: input.themeId,
-    relevance_score: input.relevanceScore ?? null,
-    link_rationale: input.linkRationale ?? null,
-    created_by: user?.id ?? null,
-  });
-  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to link signal");
-
-  await recordAudit(client, {
-    organizationId,
-    entityType: "signal_theme_link",
-    entityId: input.themeId,
-    action: "theme.signal_linked",
-    after: { signal_id: input.signalId },
-  });
-
-  await recomputeThemeAggregates(client, input.themeId);
+  await runAtomicRpc<void>(
+    client,
+    "link_theme_signal",
+    {
+      p_org_id: organizationId,
+      p_theme_id: input.themeId,
+      p_signal_id: input.signalId,
+      p_relevance_score: input.relevanceScore ?? null,
+      p_link_rationale: input.linkRationale ?? null,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to link signal",
+    }
+  );
 }
 
 export async function unlinkSignal(
@@ -91,63 +80,38 @@ export async function unlinkSignal(
   themeId: string,
   signalId: string
 ): Promise<void> {
-  const { error } = await client
-    .from("signal_theme_links")
-    .delete()
-    .eq("theme_id", themeId)
-    .eq("signal_id", signalId);
-  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to unlink signal");
-
-  await recordAudit(client, {
-    organizationId,
-    entityType: "signal_theme_link",
-    entityId: themeId,
-    action: "theme.signal_unlinked",
-    after: { signal_id: signalId },
-  });
-
-  await recomputeThemeAggregates(client, themeId);
+  await runAtomicRpc<void>(
+    client,
+    "unlink_theme_signal",
+    {
+      p_org_id: organizationId,
+      p_theme_id: themeId,
+      p_signal_id: signalId,
+    },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to unlink signal",
+    }
+  );
 }
 
 /**
  * Recompute theme aggregates only from confirmed evidence: approved signals
  * that are not AI-only hypotheses (SPEC §3.5). Rejected and pending signals
- * never increase counts.
+ * never increase counts. Runs inside one atomic RPC so the aggregates can never
+ * be left half-updated.
  */
 export async function recomputeThemeAggregates(
   client: SupabaseClient,
   themeId: string
 ): Promise<void> {
-  const { data: links } = await client
-    .from("signal_theme_links")
-    .select("signal_id")
-    .eq("theme_id", themeId);
-  const signalIds = (links ?? []).map((l) => l.signal_id);
-
-  let confirmedCount = 0;
-  const contexts = new Set<string>();
-
-  if (signalIds.length > 0) {
-    const { data: signals } = await client
-      .from("signals")
-      .select("review_status, source_type, diagnostic_session_id")
-      .in("id", signalIds);
-    for (const s of signals ?? []) {
-      if (s.review_status === "approved" && s.source_type !== "ai_hypothesis") {
-        confirmedCount += 1;
-        contexts.add(s.diagnostic_session_id ?? "no-session");
-      }
+  await runAtomicRpc<void>(
+    client,
+    "recompute_theme_aggregates",
+    { p_theme_id: themeId },
+    {
+      forbidden: "No write access to this client",
+      failure: "Failed to recompute theme aggregates",
     }
-  }
-
-  const { error } = await client
-    .from("themes")
-    .update({
-      evidence_count: confirmedCount,
-      independent_evidence_count: contexts.size,
-      contexts_count: contexts.size,
-      last_seen_at: new Date().toISOString(),
-    })
-    .eq("id", themeId);
-  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to recompute theme aggregates");
+  );
 }

@@ -73,8 +73,28 @@ begin
     'organization_invitations',
     'diagnostic_sessions',
     'signals',
+    'evidence_clusters',
     'imports',
     'client_feedback_forms',
+    -- Ticket 06: psychological model tables.
+    'themes',
+    'signal_theme_links',
+    'core_nodes',
+    'theme_core_node_links',
+    'differential_hypotheses',
+    'core_node_relations',
+    'resources',
+    'development_targets',
+    'purpose_profiles',
+    'purpose_syntheses',
+    'recommendations',
+    'recommendation_targets',
+    'diagnostic_domains',
+    'belief_templates',
+    'intervention_methods',
+    'model_changes',
+    'psychological_snapshots',
+    'model_explanations',
     'audit_log'
   ]
   loop

@@ -1,8 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { withAudit } from "./audit";
 import { ServiceError } from "./errors";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /**
@@ -60,13 +60,6 @@ const listModelChangesQuerySchema = pageQuerySchema.extend({
   entityId: uuid.optional(),
 });
 
-function mapWriteError(error: { code?: string }, fallback: string): ServiceError {
-  if (error.code === "42501") {
-    return new ServiceError("FORBIDDEN", "You do not have permission to modify this client");
-  }
-  return new ServiceError("INTERNAL_ERROR", fallback);
-}
-
 function mapRow(data: unknown): ModelChange {
   return data as ModelChange;
 }
@@ -74,7 +67,8 @@ function mapRow(data: unknown): ModelChange {
 /**
  * Append one ModelChange for a significant model transition. Call this only
  * from flows that actually change the psychological model (see module doc).
- * Also writes a regular audit entry (every mutation is audited).
+ * The ModelChange row and its regular audit entry are written by one RPC, so a
+ * failed audit append rolls the model change back.
  */
 export async function recordModelChange(
   client: SupabaseClient,
@@ -82,39 +76,22 @@ export async function recordModelChange(
 ): Promise<ModelChange> {
   const input = validate(recordModelChangeSchema, rawInput);
 
-  return withAudit(
+  return runAtomicRpc<ModelChange>(
     client,
+    "record_model_change",
     {
-      organizationId: input.organizationId,
-      entityType: "model_change",
-      action: "model_change.record",
-      reason: input.changeReason,
-      after: {
-        client_id: input.clientId,
-        entity_type: input.entityType,
-        entity_id: input.entityId,
-        previous_state: input.previousState ?? null,
-        new_state: input.newState ?? null,
-        evidence_refs: input.evidenceRefs,
-      },
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_entity_type: input.entityType,
+      p_entity_id: input.entityId,
+      p_previous_state: input.previousState ?? null,
+      p_new_state: input.newState ?? null,
+      p_change_reason: input.changeReason,
+      p_evidence_refs: input.evidenceRefs,
     },
-    async () => {
-      const { data, error } = await client
-        .from("model_changes")
-        .insert({
-          organization_id: input.organizationId,
-          client_id: input.clientId,
-          entity_type: input.entityType,
-          entity_id: input.entityId,
-          previous_state: input.previousState ?? null,
-          new_state: input.newState ?? null,
-          change_reason: input.changeReason,
-          evidence_refs: input.evidenceRefs,
-        })
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to record model change");
-      return mapRow(data);
+    {
+      forbidden: "You do not have permission to modify this client",
+      failure: "Failed to record model change",
     }
   );
 }
