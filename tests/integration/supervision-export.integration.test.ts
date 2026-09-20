@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { exportSupervision } from "@/lib/service/supervision-export";
+import { supervisionExportFilename } from "@/lib/service/export-names";
+import { SUPERVISION_CASE_KEYS, exportSupervision } from "@/lib/service/supervision-export";
 
 try {
   process.loadEnvFile(".env.local");
@@ -91,6 +92,23 @@ describe.skipIf(!available)("Anonymized supervision export (ticket 57)", () => {
       review_status: "approved",
       evidence_level: "L2_MULTIPLE_SIGNALS",
     });
+
+    await admin.from("themes").insert([
+      {
+        organization_id: orgId,
+        client_id: clientId,
+        name: "Одобренная тема",
+        review_status: "approved",
+        visibility: "internal",
+      },
+      {
+        organization_id: orgId,
+        client_id: clientId,
+        name: "Секретная тема",
+        review_status: "approved",
+        visibility: "sensitive",
+      },
+    ]);
   });
 
   afterAll(async () => {
@@ -103,17 +121,37 @@ describe.skipIf(!available)("Anonymized supervision export (ticket 57)", () => {
     const payload = (await exportSupervision(supervisor.client, { clientId })) as {
       contract: string;
       version: string;
+      export_id: string;
+      case_key: string;
+      generated_at: string;
       case: Record<string, unknown>;
     };
     expect(payload.contract).toBe("live-client-map.supervision-export");
     expect(payload.version).toBe("1.0");
 
+    // §14: the projection is exactly the allowlisted case layout.
+    expect(Object.keys(payload.case).sort()).toEqual([...SUPERVISION_CASE_KEYS].sort());
+
     const serialized = JSON.stringify(payload);
     expect(serialized).not.toContain(clientId);
     expect(serialized).not.toContain("Мне трудно просить о помощи");
+    expect(serialized).not.toContain("Секретная тема");
+    expect(serialized).not.toContain("relationships");
+    expect(serialized).toContain("Одобренная тема");
     expect(payload.case).toHaveProperty("evidence_summary");
     expect(payload.case).toHaveProperty("themes");
     expect(payload.case).toHaveProperty("core_hypotheses");
+  });
+
+  it("names the file from the per-export opaque case key", async () => {
+    const payload = (await exportSupervision(supervisor.client, { clientId })) as {
+      case_key: string;
+      generated_at: string;
+    };
+    const filename = supervisionExportFilename(payload.case_key, payload.generated_at);
+    expect(filename).toMatch(/^supervision_[0-9a-f-]+_[0-9T-]+Z\.json$/);
+    expect(filename).not.toContain(clientId);
+    expect(filename).not.toContain("Секретная тема");
   });
 
   it("forbids export without supervisor_access consent", async () => {

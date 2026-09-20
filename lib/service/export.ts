@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { recordAudit } from "./audit";
+import { assembleClientArchive, type ClientArchive } from "./client-archive";
 import { requireConsent } from "./consent";
 import { ServiceError } from "./errors";
 import { incrementCounter } from "@/lib/telemetry";
@@ -48,9 +48,10 @@ const exportQuerySchema = z
   })
   .strict();
 
-function sha256(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
+/** §12: archived Signals are opt-in; the default export is the live set. */
+const signalsExportQuerySchema = exportQuerySchema.extend({
+  includeArchived: z.boolean().optional(),
+});
 
 function csvCell(value: unknown): string {
   const s = value === null || value === undefined ? "" : String(value);
@@ -107,14 +108,20 @@ export async function requireExportAccess(
 }
 
 export async function exportSignalsCsv(client: SupabaseClient, rawQuery: unknown): Promise<string> {
-  const query = validate(exportQuerySchema, rawQuery ?? {});
+  const query = validate(signalsExportQuerySchema, rawQuery ?? {});
   const { organizationId, role } = await requireExportAccess(client, query.clientId, true);
 
+  // §12: deterministic row order is `source_created_at`, then `external_id`
+  // (the Signal UUID); archived rows are excluded unless explicitly requested.
   let request = client
     .from("signals")
     .select("*")
     .eq("client_id", query.clientId)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
+  if (!query.includeArchived) {
+    request = request.is("archived_at", null);
+  }
   if (role === "secondary_specialist") {
     request = request.neq("visibility", "sensitive");
   }
@@ -128,6 +135,7 @@ export async function exportSignalsCsv(client: SupabaseClient, rawQuery: unknown
       CSV_COLUMNS.map((column) => {
         if (column === "contract_version") return "live-client-map.signals-csv/1.0";
         if (column === "external_id") return String(signal.id);
+        if (column === "source_ref") return String(signal.source_ref_id ?? "");
         if (column === "life_areas_json") return JSON.stringify(signal.life_areas ?? []);
         if (column === "tags_json") return JSON.stringify(signal.tags ?? []);
         if (column === "context_json") return JSON.stringify(signal.context ?? null);
@@ -151,103 +159,31 @@ export async function exportSignalsCsv(client: SupabaseClient, rawQuery: unknown
   return csv;
 }
 
+/**
+ * Full client JSON archive (ticket 18). The contract-compliant assembler lives in
+ * `client-archive.ts`; this wrapper owns validation, the audit trail and the
+ * telemetry counter. The audit payload carries counts, ids and a hash only —
+ * never raw client content or a second client's identifier.
+ */
 export async function exportClientArchive(
   client: SupabaseClient,
   rawQuery: unknown
-): Promise<unknown> {
+): Promise<ClientArchive> {
   const query = validate(exportQuerySchema, rawQuery ?? {});
-
-  const { data: clientRow, error } = await client
-    .from("clients")
-    .select("organization_id")
-    .eq("id", query.clientId)
-    .maybeSingle();
-  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to read client");
-  if (!clientRow) throw new ServiceError("NOT_FOUND", "Client not found");
-  const organizationId = (clientRow as { organization_id: string }).organization_id;
-
-  const { data: owner } = await client.rpc("is_org_owner", { org_id: organizationId });
-  if (!owner)
-    throw new ServiceError("FORBIDDEN", "Only the organization owner can export a full archive");
-
-  await requireConsent(client, query.clientId, "data_storage");
-
-  const [clientData, requests, signals, themes, coreNodes, resources, targets, recommendations] =
-    await Promise.all([
-      client
-        .from("clients")
-        .select(
-          "id, display_name, first_name, last_name, birth_date, birth_time, birth_place, gender, relationship_status, occupation, current_role, children_info, client_visible_notes, status"
-        )
-        .eq("id", query.clientId)
-        .maybeSingle(),
-      client.from("client_requests").select("*").eq("client_id", query.clientId),
-      client.from("signals").select("*").eq("client_id", query.clientId),
-      client.from("themes").select("*").eq("client_id", query.clientId),
-      client.from("core_nodes").select("*").eq("client_id", query.clientId),
-      client.from("resources").select("*").eq("client_id", query.clientId),
-      client.from("development_targets").select("*").eq("client_id", query.clientId),
-      client.from("recommendations").select("*").eq("client_id", query.clientId),
-    ]);
-
-  const all = [
-    clientData,
-    requests,
-    signals,
-    themes,
-    coreNodes,
-    resources,
-    targets,
-    recommendations,
-  ];
-  for (const result of all) {
-    if (result.error) throw new ServiceError("INTERNAL_ERROR", "Failed to assemble client archive");
-  }
-
-  const data = {
-    client: clientData.data ?? null,
-    client_requests: requests.data ?? [],
-    signals: signals.data ?? [],
-    themes: themes.data ?? [],
-    core_nodes: coreNodes.data ?? [],
-    resources: resources.data ?? [],
-    development_targets: targets.data ?? [],
-    recommendations: recommendations.data ?? [],
-  };
-
-  const archive = {
-    contract: "live-client-map.client-archive",
-    version: "1.0",
-    export_id: randomUUID(),
-    generated_at: new Date().toISOString(),
-    source_organization_id: organizationId,
-    subject_client_id: query.clientId,
-    manifest: {
-      data_dictionary_version: "1.0",
-      scoring_model_versions: [],
-      ontology_versions: [],
-      snapshot_versions: [],
-      record_counts: {
-        client_requests: (requests.data ?? []).length,
-        signals: (signals.data ?? []).length,
-        themes: (themes.data ?? []).length,
-        core_nodes: (coreNodes.data ?? []).length,
-        resources: (resources.data ?? []).length,
-        development_targets: (targets.data ?? []).length,
-        recommendations: (recommendations.data ?? []).length,
-      },
-      warnings: [],
-      data_sha256: sha256(JSON.stringify(data)),
-    },
-    data,
-  };
+  const { archive, organizationId } = await assembleClientArchive(client, query.clientId);
 
   await recordAudit(client, {
     organizationId,
     entityType: "client",
     entityId: query.clientId,
     action: "export.client_archive",
-    after: archive.manifest.record_counts,
+    after: {
+      export_id: archive.export_id,
+      contract: archive.contract,
+      version: archive.version,
+      data_sha256: archive.manifest.data_sha256,
+      record_counts: archive.manifest.record_counts,
+    },
   });
   incrementCounter("export_total", "Total exports by type", { type: "client_archive" });
   return archive;

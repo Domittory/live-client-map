@@ -94,12 +94,61 @@ describe.skipIf(!available)("Export JSON/CSV (ticket 55)", () => {
     expect(csv).toContain("approved");
   });
 
+  it("orders CSV rows by source_created_at and preserves source_ref lineage", async () => {
+    const sourceRef = crypto.randomUUID();
+    await admin.from("signals").insert([
+      {
+        organization_id: orgId,
+        client_id: clientId,
+        source_type: "client_report",
+        epistemic_type: "self_report",
+        raw_statement: "Первый сигнал",
+        source_ref_id: sourceRef,
+        created_at: "2020-01-01T00:00:00Z",
+      },
+      {
+        organization_id: orgId,
+        client_id: clientId,
+        source_type: "client_report",
+        epistemic_type: "self_report",
+        raw_statement: "Второй сигнал",
+        created_at: "2021-01-01T00:00:00Z",
+      },
+    ]);
+
+    const csv = await exportSignalsCsv(specialist.client, { clientId });
+    const lines = csv.split("\n");
+    const header = lines[0].split(",");
+    const rawIndex = header.indexOf("raw_statement");
+    const refIndex = header.indexOf("source_ref");
+    const rows = lines.slice(1).map((line) => line.split(","));
+
+    const first = rows.findIndex((row) => row[rawIndex] === "Первый сигнал");
+    const second = rows.findIndex((row) => row[rawIndex] === "Второй сигнал");
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(second);
+    expect(rows[first][refIndex]).toBe(sourceRef);
+  });
+
+  it("excludes archived Signals unless includeArchived is set", async () => {
+    await admin.from("signals").insert({
+      organization_id: orgId,
+      client_id: clientId,
+      source_type: "client_report",
+      epistemic_type: "self_report",
+      raw_statement: "Архивный сигнал",
+      archived_at: "2026-01-01T00:00:00Z",
+    });
+
+    const live = await exportSignalsCsv(specialist.client, { clientId });
+    expect(live).not.toContain("Архивный сигнал");
+
+    const all = await exportSignalsCsv(specialist.client, { clientId, includeArchived: true });
+    expect(all).toContain("Архивный сигнал");
+  });
+
   it("exports a versioned JSON archive only for the owner, excluding private notes", async () => {
-    const archive = (await exportClientArchive(owner.client, { clientId })) as {
-      contract: string;
-      version: string;
-      data: { client: Record<string, unknown> | null; signals: unknown[] };
-    };
+    const archive = await exportClientArchive(owner.client, { clientId });
     expect(archive.contract).toBe("live-client-map.client-archive");
     expect(archive.version).toBe("1.0");
     expect(archive.data.signals.length).toBeGreaterThan(0);
