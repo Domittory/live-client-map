@@ -12,6 +12,10 @@ describe("GET /api/health", () => {
     expect(body.status).toBe("ok");
     expect(body.service).toBe("living-client-map");
     expect(body.version).toBe("0.1.0");
+    // Build identity is part of the readiness contract (ticket 02): it lets a
+    // harness distinguish this application's instance from a foreign server.
+    expect(typeof body.build).toBe("string");
+    expect(body.build.length).toBeGreaterThan(0);
     // No Supabase environment in this test, so the DB probe reports unavailable.
     expect(body.database).toBe("unavailable");
   });
