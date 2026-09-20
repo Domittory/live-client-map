@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Tables } from "@/lib/supabase/database.types";
 import { recordAudit } from "./audit";
 import { ServiceError } from "./errors";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 export type ClientRow = Tables<"clients">;
@@ -30,30 +31,28 @@ export const updateClientSchema = z
 
 export type UpdateClientInput = z.infer<typeof updateClientSchema>;
 
+/**
+ * Client + primary_specialist assignment + client.created audit row are one
+ * atomic RPC (ticket 01): the audit append happens inside create_client(), so
+ * there is no separate recordAudit() call that could fail on its own and leave
+ * an un-audited client behind.
+ */
 export async function createClient(client: SupabaseClient, rawInput: unknown): Promise<string> {
   const input = validate(createClientSchema, rawInput);
-  const { data, error } = await client.rpc("create_client", {
-    p_organization_id: input.organizationId,
-    p_display_name: input.displayName,
-    p_first_name: input.firstName ?? null,
-    p_last_name: input.lastName ?? null,
-  });
-  if (error) {
-    if (error.code === "42501") {
-      throw new ServiceError("FORBIDDEN", "Not a member of this organization");
+  return runAtomicRpc<string>(
+    client,
+    "create_client",
+    {
+      p_organization_id: input.organizationId,
+      p_display_name: input.displayName,
+      p_first_name: input.firstName ?? null,
+      p_last_name: input.lastName ?? null,
+    },
+    {
+      forbidden: "Not a member of this organization",
+      failure: "Failed to create client",
     }
-    throw new ServiceError("INTERNAL_ERROR", "Failed to create client");
-  }
-
-  const id = data as string;
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "client",
-    entityId: id,
-    action: "client.created",
-    after: { display_name: input.displayName },
-  });
-  return id;
+  );
 }
 
 export async function listActiveClients(
