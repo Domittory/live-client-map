@@ -66,6 +66,42 @@ export async function getCoreNode(client: SupabaseClient, nodeId: string): Promi
   return data as CoreNode;
 }
 
+export const coreNodeOptionsQuerySchema = z
+  .object({
+    organizationId: uuid,
+    clientId: uuid,
+  })
+  .strict();
+
+export interface CoreNodeOption {
+  id: string;
+  title: string;
+  status: string;
+}
+
+/**
+ * Linkable CoreNode options for a client-scoped form (ticket 13 read model).
+ * Archived and rejected nodes are excluded: a DevelopmentTarget is never linked
+ * to a conclusion a human already dismissed. Reads are RLS-scoped.
+ */
+export async function listLinkableCoreNodes(
+  client: SupabaseClient,
+  rawQuery: unknown
+): Promise<CoreNodeOption[]> {
+  const query = validate(coreNodeOptionsQuerySchema, rawQuery ?? {});
+
+  const { data, error } = await client
+    .from("core_nodes")
+    .select("id, title, status")
+    .eq("organization_id", query.organizationId)
+    .eq("client_id", query.clientId)
+    .not("status", "in", "(archived,rejected)")
+    .order("created_at", { ascending: true });
+
+  if (error) throw new ServiceError("INTERNAL_ERROR", "Failed to list core node options");
+  return (data ?? []) as CoreNodeOption[];
+}
+
 /**
  * Create a CoreNode as a working hypothesis (never a confirmed entity) and its
  * AuditLog row in one transaction.

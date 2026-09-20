@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import { ServiceError } from "./errors";
 import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
@@ -91,4 +92,85 @@ export async function createPurposeSynthesis(
       failure: "Failed to create purpose synthesis",
     }
   );
+}
+
+/** One stored PurposeProfile row (ticket 13 read model). */
+export interface PurposeProfileRecord {
+  id: string;
+  source_system: string;
+  raw_data: Record<string, unknown>;
+  interpretation: string | null;
+  strengths: string[];
+  potential_roles: string[];
+  development_directions: string[];
+  confidence: number | null;
+  visibility: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One stored PurposeSynthesis row (ticket 13 read model). */
+export interface PurposeSynthesisRecord {
+  id: string;
+  summary: string | null;
+  cross_system_matches: string[];
+  potential_conflicts: string[];
+  recommended_development_vectors: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export const clientPurposeQuerySchema = z
+  .object({
+    organizationId: uuid,
+    clientId: uuid,
+  })
+  .strict();
+
+export interface ClientPurpose {
+  profiles: PurposeProfileRecord[];
+  syntheses: PurposeSynthesisRecord[];
+}
+
+/**
+ * Client-scoped Purpose read model (ticket 13, SPEC §8.20/§8.21).
+ *
+ * The purpose layer has no automatic detection algorithm: this read model only
+ * returns the profiles and syntheses a specialist stored manually, so the screen
+ * can never present derived meaning as if it had been computed. Reads are
+ * RLS-scoped; an unassigned caller sees no rows.
+ */
+export async function getClientPurpose(
+  client: SupabaseClient,
+  rawQuery: unknown
+): Promise<ClientPurpose> {
+  const query = validate(clientPurposeQuerySchema, rawQuery ?? {});
+
+  const [profiles, syntheses] = await Promise.all([
+    client
+      .from("purpose_profiles")
+      .select(
+        "id, source_system, raw_data, interpretation, strengths, potential_roles, development_directions, confidence, visibility, created_at, updated_at"
+      )
+      .eq("organization_id", query.organizationId)
+      .eq("client_id", query.clientId)
+      .order("created_at", { ascending: false }),
+    client
+      .from("purpose_syntheses")
+      .select(
+        "id, summary, cross_system_matches, potential_conflicts, recommended_development_vectors, created_at, updated_at"
+      )
+      .eq("organization_id", query.organizationId)
+      .eq("client_id", query.clientId)
+      .order("created_at", { ascending: false }),
+  ]);
+
+  if (profiles.error || syntheses.error) {
+    throw new ServiceError("INTERNAL_ERROR", "Failed to read the purpose layer");
+  }
+
+  return {
+    profiles: (profiles.data ?? []) as PurposeProfileRecord[],
+    syntheses: (syntheses.data ?? []) as PurposeSynthesisRecord[],
+  };
 }
