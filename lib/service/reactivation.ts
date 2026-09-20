@@ -1,11 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { withAudit } from "./audit";
 import { ServiceError } from "./errors";
-import { recordModelChange } from "./model-changes";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
 import { clampScore, REACTIVATION_CONFIG, type ReactivationConfig } from "./scoring";
 import { contributesIndependentEvidence, type EvidenceLevel } from "./signal-interpretation";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /**
@@ -281,13 +280,6 @@ async function requireUserId(client: SupabaseClient): Promise<string> {
   return user.id;
 }
 
-function mapWriteError(error: { code?: string }, fallback: string): ServiceError {
-  if (error.code === "42501") {
-    return new ServiceError("FORBIDDEN", "You do not have permission to modify this core node");
-  }
-  return new ServiceError("INTERNAL_ERROR", fallback);
-}
-
 function mapRow(data: unknown): CoreNodeReactivation {
   return data as CoreNodeReactivation;
 }
@@ -398,13 +390,16 @@ export interface ReactivationRunResult {
  * must be weakened (lifecycle guard). When the configured thresholds are met
  * a PENDING proposal is created — the node status is never changed here. At
  * most one pending proposal per node is allowed.
+ *
+ * The proposal row and its audit row are written by one atomic RPC; the
+ * "one pending proposal per node" rule is re-checked inside that transaction.
  */
 export async function evaluateCoreNodeReactivation(
   client: SupabaseClient,
   rawInput: unknown
 ): Promise<ReactivationRunResult> {
   const input = validate(evaluateReactivationSchema, rawInput);
-  const userId = await requireUserId(client);
+  await requireUserId(client);
 
   const node = await requireCoreNode(client, input.coreNodeId);
   const [signals, triggerActivations] = await Promise.all([
@@ -436,37 +431,30 @@ export async function evaluateCoreNodeReactivation(
     throw new ServiceError("CONFLICT", "Core node already has a pending reactivation proposal");
   }
 
-  const proposal = await withAudit(
+  const proposal = await runAtomicRpc<CoreNodeReactivation>(
     client,
+    "create_core_node_reactivation",
     {
-      organizationId: node.organization_id,
-      entityType: "core_node_reactivation",
-      action: "core_node.reactivation_proposed",
-      reason: evaluation.reason,
+      p_org_id: node.organization_id,
+      p_client_id: node.client_id,
+      p_core_node_id: node.id,
+      p_payload: {
+        scoring_model_version: evaluation.configVersion,
+        previous_activation_score: node.activation_score,
+        proposed_activation_score: evaluation.calculation.newScore,
+        calculation: evaluation.calculation,
+        reason: evaluation.reason,
+      },
     },
-    async () => {
-      const { data, error } = await client
-        .from("core_node_reactivations")
-        .insert({
-          organization_id: node.organization_id,
-          client_id: node.client_id,
-          core_node_id: node.id,
-          scoring_model_version: evaluation.configVersion,
-          previous_activation_score: node.activation_score,
-          proposed_activation_score: evaluation.calculation.newScore,
-          calculation: evaluation.calculation,
-          reason: evaluation.reason,
-          status: "pending",
-          created_by: userId,
-        })
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to create reactivation proposal");
-      return mapRow(data);
+    {
+      forbidden: "You do not have permission to modify this core node",
+      failure: "Failed to create reactivation proposal",
+      validation: "Core node not found in this organization",
+      conflict: "Core node already has a pending reactivation proposal",
     }
   );
 
-  return { evaluation, proposal };
+  return { evaluation, proposal: mapRow(proposal) };
 }
 
 /** List reactivation proposals (history), oldest first. */
@@ -510,123 +498,66 @@ export async function getCoreNodeReactivation(
 
 /**
  * Human approval flow. Approve applies the ONLY allowed transition
- * weakened → reactivated (re-checked here: the node may have changed since
- * the proposal was created) and stores the proposed activation_score on the
- * node. Reject marks the proposal rejected and leaves the node untouched.
+ * weakened → reactivated (re-checked inside the transaction: the node may have
+ * changed since the proposal was created) and stores the proposed
+ * activation_score on the node. Reject marks the proposal rejected and leaves
+ * the node untouched.
+ *
+ * On approval the node update, the proposal decision, both audit rows and the
+ * ModelChange row are one transaction: a committed reactivated node can never
+ * be missing its ModelChange, and a failed ModelChange insert rolls the whole
+ * decision back.
  */
 export async function reviewCoreNodeReactivation(
   client: SupabaseClient,
   rawInput: unknown
 ): Promise<CoreNodeReactivation> {
   const input = validate(reviewReactivationSchema, rawInput);
-  const userId = await requireUserId(client);
+  await requireUserId(client);
 
   const proposal = await getCoreNodeReactivation(client, input.reactivationId);
   if (proposal.status !== "pending") {
     throw new ServiceError("CONFLICT", "Reactivation proposal was already reviewed");
   }
 
-  const now = new Date().toISOString();
-
   if (input.decision === "reject") {
-    return withAudit(
+    return mapRow(
+      await runAtomicRpc<CoreNodeReactivation>(
+        client,
+        "review_core_node_reactivation",
+        {
+          p_org_id: proposal.organization_id,
+          p_reactivation_id: proposal.id,
+          p_decision: "reject",
+        },
+        {
+          forbidden: "You do not have permission to modify this core node",
+          failure: "Failed to reject reactivation proposal",
+          validation: "Reactivation proposal not found",
+          conflict: "Reactivation proposal was already reviewed",
+        }
+      )
+    );
+  }
+
+  // Approve: the RPC re-checks the lifecycle guard weakened → reactivated at
+  // decision time and produces the ModelChange in the same transaction.
+  return mapRow(
+    await runAtomicRpc<CoreNodeReactivation>(
       client,
+      "review_core_node_reactivation",
       {
-        organizationId: proposal.organization_id,
-        entityType: "core_node_reactivation",
-        entityId: proposal.id,
-        action: "core_node_reactivation.reject",
-        before: { status: proposal.status },
-        after: { status: "rejected" },
+        p_org_id: proposal.organization_id,
+        p_reactivation_id: proposal.id,
+        p_decision: "approve",
       },
-      async () => {
-        const { data, error } = await client
-          .from("core_node_reactivations")
-          .update({ status: "rejected", decided_by: userId, decided_at: now, updated_at: now })
-          .eq("id", proposal.id)
-          .eq("status", "pending")
-          .select()
-          .single();
-        if (error) throw mapWriteError(error, "Failed to reject reactivation proposal");
-        if (!data) throw new ServiceError("NOT_FOUND", "Reactivation proposal not found");
-        return mapRow(data);
+      {
+        forbidden: "You do not have permission to modify this core node",
+        failure: "Failed to approve reactivation proposal",
+        validation: "Reactivation proposal not found",
+        conflict: "Core node is no longer weakened or the proposal was already reviewed",
       }
-    );
-  }
-
-  // Approve: the lifecycle guard is enforced again at decision time.
-  const node = await requireCoreNode(client, proposal.core_node_id);
-  if (node.status !== "weakened") {
-    throw new ServiceError(
-      "CONFLICT",
-      `CoreNode в статусе "${node.status}" не может быть reactivated: переход разрешён только из weakened.`
-    );
-  }
-
-  await withAudit(
-    client,
-    {
-      organizationId: proposal.organization_id,
-      entityType: "core_node",
-      entityId: node.id,
-      action: "core_node.reactivated",
-      reason: proposal.reason,
-      before: { status: node.status, activation_score: node.activation_score },
-      after: { status: "reactivated", activation_score: proposal.proposed_activation_score },
-    },
-    async () => {
-      const { error } = await client
-        .from("core_nodes")
-        .update({
-          status: "reactivated",
-          activation_score: proposal.proposed_activation_score,
-          updated_at: now,
-        })
-        .eq("id", node.id)
-        .eq("status", "weakened");
-      if (error) throw mapWriteError(error, "Failed to reactivate core node");
-    }
-  );
-
-  // ModelChange (ticket 43, SPEC §8.31): the approved reactivation is a
-  // significant model transition (weakened → reactivated).
-  await recordModelChange(client, {
-    organizationId: proposal.organization_id,
-    clientId: proposal.client_id,
-    entityType: "core_node",
-    entityId: node.id,
-    previousState: { status: node.status, activation_score: node.activation_score },
-    newState: { status: "reactivated", activation_score: proposal.proposed_activation_score },
-    changeReason: proposal.reason,
-    evidenceRefs: [
-      proposal.id,
-      ...proposal.calculation.triggerActivations.map((activation) => activation.id),
-      ...proposal.calculation.signals.map((signal) => signal.id),
-    ],
-  });
-
-  return withAudit(
-    client,
-    {
-      organizationId: proposal.organization_id,
-      entityType: "core_node_reactivation",
-      entityId: proposal.id,
-      action: "core_node_reactivation.approve",
-      before: { status: proposal.status },
-      after: { status: "approved" },
-    },
-    async () => {
-      const { data, error } = await client
-        .from("core_node_reactivations")
-        .update({ status: "approved", decided_by: userId, decided_at: now, updated_at: now })
-        .eq("id", proposal.id)
-        .eq("status", "pending")
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to approve reactivation proposal");
-      if (!data) throw new ServiceError("NOT_FOUND", "Reactivation proposal not found");
-      return mapRow(data);
-    }
+    )
   );
 }
 

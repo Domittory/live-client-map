@@ -2,12 +2,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { runAiFunction } from "@/lib/ai/gateway";
 import type { AiProvider } from "@/lib/ai/provider";
-import { withAudit } from "./audit";
 import { requireConsent } from "./consent";
 import { ServiceError } from "./errors";
-import { recordModelChange } from "./model-changes";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
 import { incrementCounter } from "@/lib/telemetry";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /**
@@ -266,11 +265,29 @@ async function requireUserId(client: SupabaseClient): Promise<string> {
   return user.id;
 }
 
-function mapWriteError(error: { code?: string }, fallback: string): ServiceError {
-  if (error.code === "42501") {
-    return new ServiceError("FORBIDDEN", "You do not have permission to modify this follow-up");
-  }
-  return new ServiceError("INTERNAL_ERROR", fallback);
+/**
+ * The RPC payload for a stored assessment. `ai_assessment` is one jsonb column,
+ * so the whole object is sent at once; the RPC validates its required keys
+ * before writing and the database CHECK constraints reject unknown values.
+ */
+function assessmentPayload(assessment: FollowUpAiAssessment): Record<string, unknown> {
+  return {
+    approval_status: assessment.approval_status,
+    source: assessment.source,
+    proposed_result_status: assessment.proposed_result_status,
+    confidence: assessment.confidence,
+    evidence_refs: assessment.evidence_refs,
+    context_changes: assessment.context_changes,
+    marker_changes: assessment.marker_changes,
+    missing_evidence: assessment.missing_evidence,
+    proposed_core_node_status: assessment.proposed_core_node_status,
+    rationale: assessment.rationale,
+    follow_up_recommendation: assessment.follow_up_recommendation,
+    run_id: assessment.run_id,
+    created_at: assessment.created_at,
+    decided_by: assessment.decided_by,
+    decided_at: assessment.decided_at,
+  };
 }
 
 async function requireCorrectionInScope(
@@ -304,13 +321,17 @@ function mapRow(data: unknown): FollowUp {
  * Schedule a follow-up for a correction. Allowed once the correction is
  * in progress or completed; cancelled/archived corrections are excluded by
  * requireCorrectionInScope (archived) and the status check below.
+ *
+ * The scheduled row and its audit row are written by one atomic RPC; the
+ * correction reference, its status and the consent gate are re-checked inside
+ * that transaction.
  */
 export async function scheduleFollowUp(
   client: SupabaseClient,
   rawInput: unknown
 ): Promise<FollowUp> {
   const input = validate(scheduleFollowUpSchema, rawInput);
-  const userId = await requireUserId(client);
+  await requireUserId(client);
 
   await requireConsent(client, input.clientId, "data_storage");
   await requireConsent(client, input.clientId, "sensitive_psychological_data");
@@ -328,34 +349,26 @@ export async function scheduleFollowUp(
     );
   }
 
-  return withAudit(
+  const followUp = await runAtomicRpc<FollowUp>(
     client,
+    "schedule_follow_up",
     {
-      organizationId: input.organizationId,
-      entityType: "follow_up",
-      action: "follow_up.schedule",
-      reason: `For correction ${input.correctionId}`,
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_correction_id: input.correctionId,
+      p_scheduled_at: input.scheduledAt,
     },
-    async () => {
-      const { data, error } = await client
-        .from("follow_ups")
-        .insert({
-          organization_id: input.organizationId,
-          client_id: input.clientId,
-          correction_id: input.correctionId,
-          scheduled_at: input.scheduledAt,
-          result_status: "scheduled",
-          created_by: userId,
-        })
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to schedule follow-up");
-      incrementCounter("follow_up_total", "Total follow-up lifecycle transitions", {
-        transition: "scheduled",
-      });
-      return mapRow(data);
+    {
+      forbidden: "You do not have permission to modify this follow-up",
+      failure: "Failed to schedule follow-up",
+      validation: "Invalid correction reference",
+      conflict: "Follow-ups can be scheduled only for in_progress or completed corrections",
     }
   );
+  incrementCounter("follow_up_total", "Total follow-up lifecycle transitions", {
+    transition: "scheduled",
+  });
+  return mapRow(followUp);
 }
 
 /** List follow-ups (history) for a correction or client, oldest first. */
@@ -398,7 +411,8 @@ export async function getFollowUp(client: SupabaseClient, followUpId: string): P
 /**
  * Fill in follow-up results and feedback: scheduled → completed.
  * client_feedback, specialist_assessment and (later) ai_assessment are stored
- * in separate columns and never mixed.
+ * in separate columns and never mixed. The transition and its audit row are
+ * written by one atomic RPC (the scheduled-state guard is re-checked inside).
  */
 export async function completeFollowUp(
   client: SupabaseClient,
@@ -418,47 +432,35 @@ export async function completeFollowUp(
   await requireConsent(client, before.client_id, "data_storage");
   await requireConsent(client, before.client_id, "sensitive_psychological_data");
 
-  const patch = {
-    retest_result: input.retestResult ?? null,
-    behavioral_result: input.behavioralResult ?? null,
-    client_feedback: input.clientFeedback ?? null,
-    specialist_assessment: input.specialistAssessment ?? null,
-    completed_at: new Date().toISOString(),
-    result_status: "completed",
-    updated_at: new Date().toISOString(),
-  };
-
-  const updated = await withAudit(
+  const updated = await runAtomicRpc<FollowUp>(
     client,
+    "complete_follow_up",
     {
-      organizationId: before.organization_id,
-      entityType: "follow_up",
-      entityId: before.id,
-      action: "follow_up.complete",
-      before,
-      after: { ...before, ...patch },
+      p_follow_up_id: before.id,
+      p_payload: {
+        retest_result: input.retestResult ?? null,
+        behavioral_result: input.behavioralResult ?? null,
+        client_feedback: input.clientFeedback ?? null,
+        specialist_assessment: input.specialistAssessment ?? null,
+      },
     },
-    async () => {
-      const { data, error } = await client
-        .from("follow_ups")
-        .update(patch)
-        .eq("id", before.id)
-        .eq("result_status", "scheduled")
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to complete follow-up");
-      if (!data) throw new ServiceError("NOT_FOUND", "Follow-up not found");
-      incrementCounter("follow_up_total", "Total follow-up lifecycle transitions", {
-        transition: "completed",
-      });
-      return mapRow(data);
+    {
+      forbidden: "You do not have permission to modify this follow-up",
+      failure: "Failed to complete follow-up",
+      validation: "Invalid follow-up result",
+      conflict: `Follow-up in status "${before.result_status}" cannot be completed`,
     }
   );
-
-  return updated;
+  incrementCounter("follow_up_total", "Total follow-up lifecycle transitions", {
+    transition: "completed",
+  });
+  return mapRow(updated);
 }
 
-/** Cancel a scheduled follow-up that will not happen. */
+/**
+ * Cancel a scheduled follow-up that will not happen. The transition and its
+ * audit row are written by one atomic RPC.
+ */
 export async function cancelFollowUp(
   client: SupabaseClient,
   followUpId: string
@@ -474,33 +476,21 @@ export async function cancelFollowUp(
     );
   }
 
-  const now = new Date().toISOString();
-  return withAudit(
+  const updated = await runAtomicRpc<FollowUp>(
     client,
+    "cancel_follow_up",
+    { p_follow_up_id: before.id },
     {
-      organizationId: before.organization_id,
-      entityType: "follow_up",
-      entityId: before.id,
-      action: "follow_up.cancel",
-      before,
-      after: { ...before, result_status: "cancelled" },
-    },
-    async () => {
-      const { data, error } = await client
-        .from("follow_ups")
-        .update({ result_status: "cancelled", updated_at: now })
-        .eq("id", before.id)
-        .eq("result_status", "scheduled")
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to cancel follow-up");
-      if (!data) throw new ServiceError("NOT_FOUND", "Follow-up not found");
-      incrementCounter("follow_up_total", "Total follow-up lifecycle transitions", {
-        transition: "cancelled",
-      });
-      return mapRow(data);
+      forbidden: "You do not have permission to modify this follow-up",
+      failure: "Failed to cancel follow-up",
+      validation: "Follow-up not found",
+      conflict: `Follow-up in status "${before.result_status}" cannot be cancelled`,
     }
   );
+  incrementCounter("follow_up_total", "Total follow-up lifecycle transitions", {
+    transition: "cancelled",
+  });
+  return mapRow(updated);
 }
 
 // --- Evaluation -------------------------------------------------------------
@@ -636,34 +626,33 @@ function deterministicGuardAssessment(missing: string[]): FollowUpAiAssessment {
   };
 }
 
+/**
+ * Store a PENDING assessment (AI result or deterministic guard) with its audit
+ * row in one atomic RPC. `result_status` is never final here: only the human
+ * review path below can produce a final verdict and its ModelChange.
+ */
 async function saveAssessment(
   client: SupabaseClient,
   followUp: FollowUp,
   assessment: FollowUpAiAssessment,
   action: string
 ): Promise<FollowUp> {
-  const patch = { ai_assessment: assessment, updated_at: new Date().toISOString() };
-  return withAudit(
-    client,
-    {
-      organizationId: followUp.organization_id,
-      entityType: "follow_up",
-      entityId: followUp.id,
-      action,
-      before: { ai_assessment: followUp.ai_assessment },
-      after: { ai_assessment: assessment },
-    },
-    async () => {
-      const { data, error } = await client
-        .from("follow_ups")
-        .update(patch)
-        .eq("id", followUp.id)
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to save AI assessment");
-      if (!data) throw new ServiceError("NOT_FOUND", "Follow-up not found");
-      return mapRow(data);
-    }
+  return mapRow(
+    await runAtomicRpc<FollowUp>(
+      client,
+      "set_follow_up_ai_assessment",
+      {
+        p_follow_up_id: followUp.id,
+        p_assessment: assessmentPayload(assessment),
+        p_action: action,
+      },
+      {
+        forbidden: "You do not have permission to modify this follow-up",
+        failure: "Failed to save AI assessment",
+        validation: "Invalid follow-up assessment",
+        conflict: "Follow-up already has a pending assessment",
+      }
+    )
   );
 }
 
@@ -758,6 +747,11 @@ export async function evaluateCorrection(
  * assessment. Only approval makes result_status final. The deterministic guard
  * runs again here: approving "effective" (proposed or overridden) without
  * objective follow-up evidence is rejected (SPEC §51.9).
+ *
+ * Approval and its ModelChange row commit in one transaction: the RPC applies
+ * the final verdict, appends both audit rows and inserts the ModelChange for
+ * the transition, so a committed final verdict can never be missing its
+ * history row — and a failed ModelChange insert rolls the verdict back.
  */
 export async function reviewFollowUpAssessment(
   client: SupabaseClient,
@@ -784,7 +778,26 @@ export async function reviewFollowUpAssessment(
       decided_by: userId,
       decided_at: now,
     };
-    return saveAssessment(client, followUp, rejected, "follow_up.assessment_reject");
+    // Rejection flips only the assessment; no ModelChange is produced.
+    return mapRow(
+      await runAtomicRpc<FollowUp>(
+        client,
+        "review_follow_up_assessment",
+        {
+          p_follow_up_id: followUp.id,
+          p_decision: "reject",
+          p_assessment: assessmentPayload(rejected),
+          p_final_status: null,
+          p_model_change_reason: null,
+        },
+        {
+          forbidden: "You do not have permission to modify this follow-up",
+          failure: "Failed to review assessment",
+          validation: "Invalid assessment review",
+          conflict: "Assessment was already reviewed",
+        }
+      )
+    );
   }
 
   const finalStatus = input.finalStatus ?? assessment.proposed_result_status;
@@ -804,50 +817,30 @@ export async function reviewFollowUpAssessment(
     decided_by: userId,
     decided_at: now,
   };
-  const patch = {
-    ai_assessment: approved,
-    result_status: finalStatus,
-    updated_at: now,
-  };
-
-  const updated = await withAudit(
-    client,
-    {
-      organizationId: followUp.organization_id,
-      entityType: "follow_up",
-      entityId: followUp.id,
-      action: "follow_up.assessment_approve",
-      before: { ai_assessment: followUp.ai_assessment, result_status: followUp.result_status },
-      after: { ai_assessment: approved, result_status: finalStatus },
-    },
-    async () => {
-      const { data, error } = await client
-        .from("follow_ups")
-        .update(patch)
-        .eq("id", followUp.id)
-        .eq("result_status", "completed")
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to review assessment");
-      if (!data) throw new ServiceError("NOT_FOUND", "Follow-up not found");
-      return mapRow(data);
-    }
-  );
 
   // ModelChange (ticket 43, SPEC §8.31): the approved final verdict is a
-  // significant model transition (completed → effective/…/unclear).
-  await recordModelChange(client, {
-    organizationId: followUp.organization_id,
-    clientId: followUp.client_id,
-    entityType: "follow_up",
-    entityId: followUp.id,
-    previousState: { result_status: followUp.result_status },
-    newState: { result_status: finalStatus },
-    changeReason: `Follow-up assessment approved: ${finalStatus}. ${assessment.rationale}`,
-    evidenceRefs: assessment.evidence_refs,
-  });
-
-  return updated;
+  // significant model transition (completed → effective/…/unclear). The RPC
+  // inserts it in the same transaction as the verdict.
+  return mapRow(
+    await runAtomicRpc<FollowUp>(
+      client,
+      "review_follow_up_assessment",
+      {
+        p_follow_up_id: followUp.id,
+        p_decision: "approve",
+        p_assessment: assessmentPayload(approved),
+        p_final_status: finalStatus,
+        p_model_change_reason: `Follow-up assessment approved: ${finalStatus}. ${assessment.rationale}`,
+      },
+      {
+        forbidden:
+          "A correction cannot be marked effective without follow-up evidence (retest, behavioral result, observations or measured markers)",
+        failure: "Failed to review assessment",
+        validation: "Invalid assessment review",
+        conflict: "Assessment was already reviewed",
+      }
+    )
+  );
 }
 
 export {

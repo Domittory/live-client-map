@@ -95,6 +95,17 @@ begin
     'model_changes',
     'psychological_snapshots',
     'model_explanations',
+    -- Ticket 07: corrections, observations, follow-ups and reactivation.
+    'corrections',
+    'correction_targets',
+    'correction_expected_markers',
+    'observations',
+    'behavioral_markers',
+    'behavioral_marker_entries',
+    'follow_ups',
+    -- core_nodes is already covered by ticket 06 and is updated by the
+    -- reactivation decision.
+    'core_node_reactivations',
     'audit_log'
   ]
   loop

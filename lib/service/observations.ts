@@ -1,9 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { withAudit } from "./audit";
 import { requireConsent } from "./consent";
 import { ServiceError } from "./errors";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /** Observation source types (SPEC §8.28, ticket 40). */
@@ -238,13 +238,6 @@ async function requireUserId(client: SupabaseClient): Promise<string> {
   return user.id;
 }
 
-function mapWriteError(error: { code?: string }, fallback: string): ServiceError {
-  if (error.code === "42501") {
-    return new ServiceError("FORBIDDEN", "You do not have permission to modify this record");
-  }
-  return new ServiceError("INTERNAL_ERROR", fallback);
-}
-
 async function requireObservationConsents(
   client: SupabaseClient,
   clientId: string,
@@ -310,13 +303,17 @@ function assertValueInScale(value: number, scaleMin: number, scaleMax: number): 
 /**
  * Record an Observation (ticket 40). Enforces consent gates and validates the
  * optional correction reference against the same organization/client.
+ *
+ * The observation row and its audit row are written by one atomic RPC; the
+ * consent gate and the correction reference are re-checked inside that
+ * transaction.
  */
 export async function createObservation(
   client: SupabaseClient,
   rawInput: unknown
 ): Promise<Observation> {
   const input = validate(createObservationSchema, rawInput);
-  const userId = await requireUserId(client);
+  await requireUserId(client);
 
   await requireObservationConsents(client, input.clientId, input.visibility);
 
@@ -329,36 +326,29 @@ export async function createObservation(
     );
   }
 
-  return withAudit(
+  return runAtomicRpc<Observation>(
     client,
+    "create_observation",
     {
-      organizationId: input.organizationId,
-      entityType: "observation",
-      action: "observation.create",
-      reason: input.correctionId ? `Linked to correction ${input.correctionId}` : undefined,
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_payload: {
+        correction_id: input.correctionId ?? null,
+        date: input.date ?? null,
+        source_type: input.sourceType,
+        description: input.description,
+        life_areas: input.lifeAreas,
+        valence: input.valence,
+        intensity: input.intensity,
+        supports_improvement: input.supportsImprovement,
+        confidence: input.confidence,
+        visibility: input.visibility,
+      },
     },
-    async () => {
-      const { data, error } = await client
-        .from("observations")
-        .insert({
-          organization_id: input.organizationId,
-          client_id: input.clientId,
-          correction_id: input.correctionId ?? null,
-          date: input.date ?? new Date().toISOString().slice(0, 10),
-          source_type: input.sourceType,
-          description: input.description,
-          life_areas: input.lifeAreas,
-          valence: input.valence,
-          intensity: input.intensity,
-          supports_improvement: input.supportsImprovement,
-          confidence: input.confidence,
-          visibility: input.visibility,
-          created_by: userId,
-        })
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to create observation");
-      return data as Observation;
+    {
+      forbidden: "You do not have permission to modify this record",
+      failure: "Failed to create observation",
+      validation: "Invalid observation or correction reference",
     }
   );
 }
@@ -404,7 +394,11 @@ export async function getObservation(
   return data as Observation;
 }
 
-/** Update an observation. Switching to client_visible requires client_portal consent. */
+/**
+ * Update an observation. Switching to client_visible requires client_portal
+ * consent. The update and its audit row are written by one atomic RPC; the
+ * consent gate is re-checked inside that transaction.
+ */
 export async function updateObservation(
   client: SupabaseClient,
   rawInput: unknown
@@ -431,48 +425,37 @@ export async function updateObservation(
     }
     patch.visibility = input.visibility;
   }
-  patch.updated_at = new Date().toISOString();
 
-  if (Object.keys(patch).length === 1 && patch.updated_at) {
+  if (Object.keys(patch).length === 0) {
     return before;
   }
 
-  const updated = await withAudit(
+  return runAtomicRpc<Observation>(
     client,
+    "update_observation",
+    { p_observation_id: before.id, p_patch: patch },
     {
-      organizationId: before.organization_id,
-      entityType: "observation",
-      entityId: before.id,
-      action: "observation.update",
-      before,
-      after: { ...before, ...patch },
-    },
-    async () => {
-      const { data, error } = await client
-        .from("observations")
-        .update(patch)
-        .eq("id", before.id)
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to update observation");
-      if (!data) throw new ServiceError("NOT_FOUND", "Observation not found");
-      return data as Observation;
+      forbidden: "You do not have permission to modify this record",
+      failure: "Failed to update observation",
+      validation: "Invalid observation update",
     }
   );
-
-  return updated;
 }
 
 /**
  * Create a BehavioralMarker (ticket 40). The baseline is captured here and is
  * never overwritten afterwards; when provided it also seeds the value history.
+ *
+ * The marker row, its baseline history entry and the audit row are written by
+ * one atomic RPC: a marker with a baseline but no history entry is impossible,
+ * and a failed audit append rolls the marker back.
  */
 export async function createMarker(
   client: SupabaseClient,
   rawInput: unknown
 ): Promise<BehavioralMarkerDetail> {
   const input = validate(createMarkerSchema, rawInput);
-  const userId = await requireUserId(client);
+  await requireUserId(client);
 
   await requireConsent(client, input.clientId, "data_storage");
   await requireConsent(client, input.clientId, "sensitive_psychological_data");
@@ -495,54 +478,34 @@ export async function createMarker(
     input.clientId
   );
 
-  const baseline = input.baselineValue ?? null;
-  const current = input.currentValue ?? null;
-  const trend = computeTrend(current, baseline, input.scaleMin, input.scaleMax);
-
-  const marker = await withAudit(
+  const markerId = await runAtomicRpc<string>(
     client,
+    "create_behavioral_marker",
     {
-      organizationId: input.organizationId,
-      entityType: "behavioral_marker",
-      action: "behavioral_marker.create",
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_payload: {
+        name: input.name,
+        description: input.description ?? null,
+        life_area: input.lifeArea ?? null,
+        marker_type: input.markerType,
+        scale_min: input.scaleMin,
+        scale_max: input.scaleMax,
+        baseline_value: input.baselineValue ?? null,
+        current_value: input.currentValue ?? null,
+        linked_core_node_id: input.linkedCoreNodeId ?? null,
+        linked_theme_id: input.linkedThemeId ?? null,
+        linked_resource_id: input.linkedResourceId ?? null,
+      },
     },
-    async () => {
-      const { data, error } = await client
-        .from("behavioral_markers")
-        .insert({
-          organization_id: input.organizationId,
-          client_id: input.clientId,
-          name: input.name,
-          description: input.description ?? null,
-          life_area: input.lifeArea ?? null,
-          marker_type: input.markerType,
-          scale_min: input.scaleMin,
-          scale_max: input.scaleMax,
-          current_value: current,
-          baseline_value: baseline,
-          trend,
-          linked_core_node_id: input.linkedCoreNodeId ?? null,
-          linked_theme_id: input.linkedThemeId ?? null,
-          linked_resource_id: input.linkedResourceId ?? null,
-        })
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to create behavioral marker");
-      return data as BehavioralMarker;
+    {
+      forbidden: "You do not have permission to modify this record",
+      failure: "Failed to create behavioral marker",
+      validation: "Invalid behavioral marker or evidence link",
     }
   );
 
-  if (baseline !== null) {
-    const { error } = await client.from("behavioral_marker_entries").insert({
-      marker_id: marker.id,
-      value: baseline,
-      note: "baseline",
-      recorded_by: userId,
-    });
-    if (error) throw mapWriteError(error, "Failed to record baseline entry");
-  }
-
-  return getMarker(client, marker.id);
+  return getMarker(client, markerId);
 }
 
 /** List behavioral markers for a client or organization. */
@@ -601,7 +564,8 @@ export async function getMarker(
 /**
  * Update marker metadata and evidence links. Baseline cannot be changed here
  * (the schema carries no baseline field); current value changes go through
- * recordMarkerValue so every change lands in the history.
+ * recordMarkerValue so every change lands in the history. The update and its
+ * audit row are written by one atomic RPC.
  */
 export async function updateMarker(
   client: SupabaseClient,
@@ -637,95 +601,57 @@ export async function updateMarker(
   if (input.scaleMin !== undefined) patch.scale_min = input.scaleMin;
   if (input.scaleMax !== undefined) patch.scale_max = input.scaleMax;
   if (input.linkedCoreNodeId !== undefined) patch.linked_core_node_id = input.linkedCoreNodeId;
-  if (input.linkedThemeId !== undefined) patch.linkedThemeId = input.linkedThemeId;
+  if (input.linkedThemeId !== undefined) patch.linked_theme_id = input.linkedThemeId;
   if (input.linkedResourceId !== undefined) patch.linked_resource_id = input.linkedResourceId;
-  patch.updated_at = new Date().toISOString();
 
-  if (Object.keys(patch).length === 1 && patch.updated_at) {
+  if (Object.keys(patch).length === 0) {
     return before;
   }
 
-  const updated = await withAudit(
+  await runAtomicRpc<BehavioralMarker>(
     client,
+    "update_behavioral_marker",
+    { p_marker_id: before.id, p_patch: patch },
     {
-      organizationId: before.organization_id,
-      entityType: "behavioral_marker",
-      entityId: before.id,
-      action: "behavioral_marker.update",
-      before,
-      after: { ...before, ...patch },
-    },
-    async () => {
-      const { data, error } = await client
-        .from("behavioral_markers")
-        .update(patch)
-        .eq("id", before.id)
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to update behavioral marker");
-      if (!data) throw new ServiceError("NOT_FOUND", "Behavioral marker not found");
-      return data as BehavioralMarker;
+      forbidden: "You do not have permission to modify this record",
+      failure: "Failed to update behavioral marker",
+      validation: "Invalid behavioral marker update",
     }
   );
 
-  return getMarker(client, updated.id);
+  return getMarker(client, before.id);
 }
 
 /**
  * Record a new current value: appends a history entry and recomputes the
  * trend relative to the baseline. Never touches baseline_value.
+ *
+ * The history entry, the marker's current_value/trend and the audit row are
+ * written by one atomic RPC, so history can never diverge from the stored
+ * current value.
  */
 export async function recordMarkerValue(
   client: SupabaseClient,
   rawInput: unknown
 ): Promise<BehavioralMarkerDetail> {
   const input = validate(recordMarkerValueSchema, rawInput);
-  const userId = await requireUserId(client);
+  await requireUserId(client);
 
   const before = await getMarker(client, input.markerId);
   assertValueInScale(input.value, before.scale_min, before.scale_max);
 
-  const trend = computeTrend(
-    input.value,
-    before.baseline_value,
-    before.scale_min,
-    before.scale_max
-  );
-  const now = new Date().toISOString();
-
-  const { error: entryError } = await client.from("behavioral_marker_entries").insert({
-    marker_id: before.id,
-    value: input.value,
-    note: input.note ?? null,
-    recorded_by: userId,
-  });
-  if (entryError) throw mapWriteError(entryError, "Failed to record marker value");
-
-  await withAudit(
+  await runAtomicRpc<BehavioralMarker>(
     client,
+    "record_behavioral_marker_value",
     {
-      organizationId: before.organization_id,
-      entityType: "behavioral_marker",
-      entityId: before.id,
-      action: "behavioral_marker.record_value",
-      before: {
-        current_value: before.current_value,
-        baseline_value: before.baseline_value,
-        trend: before.trend,
-      },
-      after: { current_value: input.value, baseline_value: before.baseline_value, trend },
-      reason: input.note,
+      p_marker_id: before.id,
+      p_value: input.value,
+      p_note: input.note ?? null,
     },
-    async () => {
-      const { data, error } = await client
-        .from("behavioral_markers")
-        .update({ current_value: input.value, trend, updated_at: now })
-        .eq("id", before.id)
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to update marker current value");
-      if (!data) throw new ServiceError("NOT_FOUND", "Behavioral marker not found");
-      return data as BehavioralMarker;
+    {
+      forbidden: "You do not have permission to modify this record",
+      failure: "Failed to record marker value",
+      validation: "Marker value is outside the marker scale",
     }
   );
 

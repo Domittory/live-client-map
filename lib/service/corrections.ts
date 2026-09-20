@@ -1,9 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
-import { recordAudit, withAudit } from "./audit";
 import { requireConsent } from "./consent";
 import { ServiceError } from "./errors";
 import { decodeCursor, encodeCursor, pageQuerySchema, toPage, type Page } from "./pagination";
+import { runAtomicRpc } from "./transaction";
 import { uuid, validate } from "./validation";
 
 /** Correction statuses (SPEC §8.25). */
@@ -160,13 +160,6 @@ async function requireUserId(client: SupabaseClient): Promise<string> {
   return user.id;
 }
 
-function mapWriteError(error: { code?: string }, fallback: string): ServiceError {
-  if (error.code === "42501") {
-    return new ServiceError("FORBIDDEN", "You do not have permission to modify this correction");
-  }
-  return new ServiceError("INTERNAL_ERROR", fallback);
-}
-
 async function requireRecommendation(
   client: SupabaseClient,
   recommendationId: string,
@@ -235,13 +228,18 @@ async function countExpectedMarkers(client: SupabaseClient, correctionId: string
  * Create a Correction from an approved Recommendation (ticket 39).
  * Enforces consent, target validity, method contraindications and copies the
  * recommendation's final priority score for future comparison.
+ *
+ * The correction row, every target, every expected marker and both audit rows
+ * (plan + create) are written by one atomic RPC: a failure at any step — audit
+ * append included — rolls the whole correction back, so a Correction can never
+ * exist with only part of its targets/markers or without its audit trail.
  */
 export async function createCorrectionFromRecommendation(
   client: SupabaseClient,
   rawInput: unknown
 ): Promise<CorrectionDetail> {
   const input = validate(createFromRecommendationSchema, rawInput);
-  const userId = await requireUserId(client);
+  await requireUserId(client);
 
   await requireConsent(client, input.clientId, "data_storage");
   await requireConsent(client, input.clientId, "sensitive_psychological_data");
@@ -249,6 +247,9 @@ export async function createCorrectionFromRecommendation(
     await requireConsent(client, input.clientId, "client_portal");
   }
 
+  // Read-only pre-checks keep the service-level error contract (NOT_FOUND /
+  // FORBIDDEN / CONFLICT) informative. Every rule is re-asserted inside the RPC
+  // transaction, which is what actually guarantees consistency.
   const recommendation = await requireRecommendation(
     client,
     input.recommendationId,
@@ -259,9 +260,8 @@ export async function createCorrectionFromRecommendation(
     throw new ServiceError("FORBIDDEN", "Only approved recommendations can become corrections");
   }
 
-  let method: { id: string; archived_at: string | null; contraindications: string[] } | null = null;
   if (input.interventionMethodId) {
-    method = await requireMethod(client, input.interventionMethodId);
+    const method = await requireMethod(client, input.interventionMethodId);
     if (method.archived_at !== null) {
       throw new ServiceError("CONFLICT", "Archived intervention methods cannot be used");
     }
@@ -275,78 +275,48 @@ export async function createCorrectionFromRecommendation(
 
   await validateTargets(client, input.targets, input.organizationId, input.clientId);
 
-  const correction = await withAudit(
+  const correctionId = await runAtomicRpc<string>(
     client,
+    "create_correction_from_recommendation",
     {
-      organizationId: input.organizationId,
-      entityType: "correction",
-      action: "correction.create_from_recommendation",
-      reason: `From recommendation ${input.recommendationId}`,
+      p_org_id: input.organizationId,
+      p_client_id: input.clientId,
+      p_payload: {
+        recommendation_id: input.recommendationId,
+        intervention_method_id: input.interventionMethodId ?? null,
+        date: input.date ?? null,
+        title: input.title,
+        method_notes: input.methodNotes ?? null,
+        rationale: input.rationale ?? null,
+        expected_effect: input.expectedEffect ?? null,
+        specialist_notes: input.specialistNotes ?? null,
+        client_visible_summary: input.clientVisibleSummary ?? null,
+        contraindications_acknowledged: input.contraindicationsAcknowledged,
+        targets: input.targets.map((target) => ({
+          target_type: target.targetType,
+          target_id: target.targetId,
+          role: target.role,
+          expected_effect: target.expectedEffect ?? null,
+        })),
+        expected_markers: input.expectedMarkers.map((marker) => ({
+          marker: marker.marker,
+          life_area: marker.lifeArea ?? null,
+          expected_direction: marker.expectedDirection,
+          measurement_type: marker.measurementType,
+          baseline_value: marker.baselineValue ?? null,
+          target_value: marker.targetValue ?? null,
+        })),
+      },
     },
-    async () => {
-      const { data, error } = await client
-        .from("corrections")
-        .insert({
-          organization_id: input.organizationId,
-          client_id: input.clientId,
-          recommendation_id: input.recommendationId,
-          intervention_method_id: input.interventionMethodId ?? null,
-          date: input.date ?? new Date().toISOString().slice(0, 10),
-          title: input.title,
-          method_notes: input.methodNotes ?? null,
-          rationale: input.rationale ?? null,
-          expected_effect: input.expectedEffect ?? null,
-          priority_score_before: recommendation.final_priority_score,
-          status: "planned",
-          specialist_notes: input.specialistNotes ?? null,
-          client_visible_summary: input.clientVisibleSummary ?? null,
-          contraindications_acknowledged: input.contraindicationsAcknowledged,
-          created_by: userId,
-        })
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to create correction");
-      return data as Correction;
+    {
+      forbidden: "You do not have permission to modify this client",
+      failure: "Failed to create correction",
+      validation: "Invalid correction, target or expected marker",
+      conflict: "Archived intervention methods cannot be used",
     }
   );
 
-  for (const target of input.targets) {
-    const { error } = await client.from("correction_targets").insert({
-      correction_id: correction.id,
-      target_type: target.targetType,
-      target_id: target.targetId,
-      role: target.role,
-      expected_effect: target.expectedEffect ?? null,
-    });
-    if (error) throw mapWriteError(error, "Failed to create correction target");
-  }
-
-  for (const marker of input.expectedMarkers) {
-    const { error } = await client.from("correction_expected_markers").insert({
-      correction_id: correction.id,
-      marker: marker.marker,
-      life_area: marker.lifeArea ?? null,
-      expected_direction: marker.expectedDirection,
-      measurement_type: marker.measurementType,
-      baseline_value: marker.baselineValue ?? null,
-      target_value: marker.targetValue ?? null,
-    });
-    if (error) throw mapWriteError(error, "Failed to create expected marker");
-  }
-
-  await recordAudit(client, {
-    organizationId: input.organizationId,
-    entityType: "correction",
-    entityId: correction.id,
-    action: "correction.plan",
-    after: {
-      targets: input.targets.length,
-      expected_markers: input.expectedMarkers.length,
-      priority_score_before: correction.priority_score_before,
-    },
-  });
-
-  return getCorrection(client, correction.id);
+  return getCorrection(client, correctionId);
 }
 
 /** List corrections for a client or organization. */
@@ -411,7 +381,14 @@ export async function getCorrection(
   };
 }
 
-/** Update a correction. Status transition to completed requires expected markers. */
+/**
+ * Update a correction. Status transition to completed requires expected markers.
+ *
+ * The update and its audit row are written by one atomic RPC; the "expected
+ * markers present" rule and the consent gates are re-checked inside that
+ * transaction, so a completed correction can never exist without markers and a
+ * failed audit append leaves the previous correction untouched.
+ */
 export async function updateCorrection(
   client: SupabaseClient,
   rawInput: unknown
@@ -453,69 +430,50 @@ export async function updateCorrection(
   if (input.contraindicationsAcknowledged !== undefined) {
     patch.contraindications_acknowledged = input.contraindicationsAcknowledged;
   }
-  patch.updated_at = new Date().toISOString();
 
-  if (Object.keys(patch).length === 1 && patch.updated_at) {
+  if (Object.keys(patch).length === 0) {
     return before;
   }
 
-  const updated = await withAudit(
+  await runAtomicRpc<Correction>(
     client,
+    "update_correction",
     {
-      organizationId: before.organization_id,
-      entityType: "correction",
-      entityId: before.id,
-      action: "correction.update",
-      before,
-      after: { ...before, ...patch },
+      p_correction_id: before.id,
+      p_patch: patch,
     },
-    async () => {
-      const { data, error } = await client
-        .from("corrections")
-        .update(patch)
-        .eq("id", before.id)
-        .is("archived_at", null)
-        .select()
-        .single();
-      if (error) throw mapWriteError(error, "Failed to update correction");
-      if (!data) throw new ServiceError("NOT_FOUND", "Correction not found");
-      return data as Correction;
+    {
+      forbidden: "You do not have permission to modify this correction",
+      failure: "Failed to update correction",
+      validation: "Invalid correction update",
+      conflict: "Archived corrections cannot be edited",
     }
   );
 
-  return getCorrection(client, updated.id);
+  return getCorrection(client, before.id);
 }
 
-/** Soft-delete a correction. */
+/**
+ * Soft-delete a correction. The archive flag and its audit row are written by
+ * one atomic RPC; an archived correction is idempotent and never produces a
+ * second audit row.
+ */
 export async function archiveCorrection(
   client: SupabaseClient,
   correctionId: string
 ): Promise<void> {
-  const before = await getCorrection(client, correctionId);
+  const id = validate(uuid, correctionId);
+  const before = await getCorrection(client, id);
   if (before.archived_at !== null) return;
 
-  const archivedAt = new Date().toISOString();
-  await withAudit(
+  await runAtomicRpc<void>(
     client,
+    "archive_correction",
+    { p_correction_id: before.id },
     {
-      organizationId: before.organization_id,
-      entityType: "correction",
-      entityId: before.id,
-      action: "correction.archive",
-      before,
-      after: { ...before, archived_at: archivedAt },
-    },
-    async () => {
-      const { data, error } = await client
-        .from("corrections")
-        .update({ archived_at: archivedAt, updated_at: archivedAt })
-        .eq("id", before.id)
-        .is("archived_at", null)
-        .select("id");
-      if (error) throw mapWriteError(error, "Failed to archive correction");
-      if (!data || data.length === 0) {
-        throw new ServiceError("NOT_FOUND", "Correction not found or already archived");
-      }
+      forbidden: "You do not have permission to modify this correction",
+      failure: "Failed to archive correction",
+      validation: "Correction not found",
     }
   );
 }
